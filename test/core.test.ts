@@ -160,7 +160,7 @@ test("multiple metrics share a benchmark identity but remain distinct observatio
 test("query filters nested offers, paginates and computes a transparent profile estimate", () => {
   const record = sourceRecord("models_dev", "openai/gpt-4o", "GPT-4o", "https://models.dev/catalog.json", "offer");
   record.offers![0].reasoning_efforts = ["low", "medium"];
-  record.offers![0].pricing = normalizeMillionPricing({ input: 1, output: 2, cache_read: 0.2, cache_write: 1.1 });
+  record.offers![0].pricing = normalizeMillionPricing({ input: 1, output: 2, cache_read: 0.2, cache_write: 1.1 }, "full_rate");
   const snapshot = mergeSnapshots(undefined, [result("models_dev", [record])], "2026-08-26T00:00:00.000Z");
   assert.equal(listModels(snapshot, new URLSearchParams("capability=tools&limit=1")).data.length, 1);
   const offers = listOffers(snapshot, new URLSearchParams("profile=rag-long-prefix&reasoning_effort=low"));
@@ -301,14 +301,16 @@ test("Pipecat STT parser keeps provider/model slugs and streaming metrics", asyn
     '  model_label="model-x",',
     '),',
   ].join("\n");
-  const collected = await collectPipecatStt({ fetchImpl: async (input) => new Response(String(input).endsWith("services.py") ? services : readme) });
+  await assert.rejects(collectPipecatStt({ fetchImpl: async (input) => new Response(String(input).endsWith("services.py") ? services : readme) }), /collection is incomplete/);
+  const completeReadme = readme.split("\n").filter((line) => !line.startsWith("| Broken |")).join("\n");
+  const collected = await collectPipecatStt({ fetchImpl: async (input) => new Response(String(input).endsWith("services.py") ? services : completeReadme) });
   assert.equal(collected.records.length, 1);
   assert.equal(collected.records[0].id, "test-vendor/model-x");
   assert.equal(collected.records[0].offers?.[0].provider_id, "test-vendor");
   assert.equal(collected.records[0].offers?.[0].runtime[0].metrics?.ttfs_p95_ms, 400);
   assert.equal(collected.records[0].benchmarks?.find((row) => row.metric === "semantic_wer_mean")?.value, 2.5);
   assert.equal(collected.records[0].aliases?.find((value) => value.kind === "service_key")?.id, "test_vendor_model_x");
-  assert.equal(collected.records[0].benchmarks?.find((row) => row.metric === "semantic_wer_mean")?.configuration?.service_key, "test_vendor_model_x");
+  assert.equal(collected.records[0].benchmarks?.find((row) => row.metric === "semantic_wer_mean")?.metrics?.service_key, "test_vendor_model_x");
   assert.equal(collected.benchmark_definitions?.length, 4);
 });
 
@@ -364,7 +366,7 @@ test("OpenRouter propagates model expiration to provider offers", async () => {
     includeEndpoints: true,
     endpointCap: 1,
     fetchImpl: async (input) => String(input).includes("/endpoints")
-      ? new Response(JSON.stringify({ data: { endpoints: [{ provider_name: "OpenAI", model_id: "openai/gpt-expiring" }] } }), { status: 200 })
+      ? new Response(JSON.stringify({ data: { id: "openai/gpt-expiring", endpoints: [{ provider_name: "OpenAI", model_id: "openai/gpt-expiring" }] } }), { status: 200 })
       : new Response(JSON.stringify(payload), { status: 200 }),
   });
 
@@ -619,11 +621,12 @@ test("complete source collections replace by default while suspicious drops pres
   assert.match(guarded[0].error ?? "", /previous projection was kept/);
 });
 
-test("schema describes the snapshot and shape guard validates hashless fixtures", () => {
+test("schema describes the snapshot and requires a verified content hash", () => {
   assert.equal(MODELS_DB_SCHEMA.$schema, "https://json-schema.org/draft/2020-12/schema");
   assert.deepEqual(MODELS_DB_SCHEMA.$defs.api_meta.properties.scope.enum, ["available", "all"]);
   assert.ok(MODELS_DB_SCHEMA.$defs.comparison_lane.properties.lane_id);
-  assertSnapshotShape({ schema_version: "1.0", generated_at: "2026-08-26T00:00:00.000Z", content_hash: "", workload_profiles: [], sources: [], benchmarks: [], models: [] } satisfies Snapshot);
+  assert.throws(() => assertSnapshotShape({ schema_version: "1.0", generated_at: "2026-08-26T00:00:00.000Z", content_hash: "", workload_profiles: [], sources: [], benchmarks: [], models: [] } satisfies Snapshot), /SHA-256/);
+  assertSnapshotShape(mergeSnapshots(undefined, [], "2026-08-26T00:00:00.000Z"));
 });
 
 function result(sourceId: string, records: SourceRecord[]): SourceResult {

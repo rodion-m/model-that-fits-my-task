@@ -38,6 +38,10 @@ export interface PricePoint {
     utc_start?: number;
     utc_end?: number;
   };
+  /** Original order for conditional upstream overrides (later entries win per price key). */
+  override_index?: number;
+  /** Whether a cache write rate includes ordinary input billing or is an extra charge. */
+  cache_write_billing?: "full_rate" | "surcharge";
 }
 
 export interface BenchmarkObservation {
@@ -109,7 +113,7 @@ export interface Offer {
   provider_name?: string;
   provider_model_id: string;
   variant?: string;
-  status: "active" | "absent";
+  status: "active" | "absent" | "unknown";
   expires_at?: string;
   quantization?: string;
   context_tokens?: number;
@@ -122,6 +126,8 @@ export interface Offer {
   runtime: RuntimeObservation[];
   measurements: MeasurementObservation[];
   evidence: Evidence[];
+  /** Retained only for offers reported by multiple sources, so replacement can remove one contribution. */
+  source_projections?: Record<string, Omit<Offer, "source_projections">>;
 }
 
 export interface Model {
@@ -149,7 +155,14 @@ export interface Model {
   runtime_observations: RuntimeObservation[];
   measurements: MeasurementObservation[];
   evidence: Evidence[];
+  /** Source-specific scalar metadata; flattened fields are recomputed after each source replacement. */
+  metadata_by_source?: Record<string, ModelMetadata>;
 }
+
+export type ModelMetadata = Partial<Pick<Model,
+  "identity_confidence" | "name" | "creators" | "family" | "release_date" | "knowledge_cutoff"
+  | "open_weights" | "license" | "modalities" | "context_tokens" | "max_output_tokens" | "capabilities"
+>>;
 
 export interface SourceRecord {
   id: string;
@@ -230,6 +243,7 @@ export interface ApiEnvelope<T> {
     schema_version: string;
     scope?: "available" | "all";
     excluded_count?: number;
+    score_direction?: "higher" | "lower";
   };
 }
 

@@ -108,7 +108,7 @@ function buildRecord(
         ...(rtfx !== undefined ? { rtfx } : {}),
         ...(modelSize !== undefined ? { model_size_b: modelSize } : {}),
       },
-      evidence: evidence(config.sourceId, config.url, fetchedAt, ["runtime", "evaluation_configuration"], [], "RTFx is the upstream benchmark value; the repository documents its fixed H200 evaluation hardware.") ,
+      evidence: evidence(config.sourceId, config.url, fetchedAt, ["runtime", "evaluation_configuration"], [], "RTFx is from the upstream plotting CSV snapshot. Hardware and runtime conditions are not published per row; no shared H200 environment is assumed.") ,
     };
     normalized.runtime_observations = [runtime];
   }

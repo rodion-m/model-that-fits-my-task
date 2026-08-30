@@ -15,6 +15,7 @@ export class FetchError extends Error {
 async function readBody(response: Response, url: string, maxBytes: number): Promise<string> {
   const advertised = Number(response.headers.get("content-length"));
   if (Number.isFinite(advertised) && advertised > maxBytes) {
+    await response.body?.cancel();
     throw new FetchError(`response exceeds ${maxBytes} bytes`, url, response.status);
   }
   if (!response.body) return response.text();
@@ -45,8 +46,10 @@ async function readBody(response: Response, url: string, maxBytes: number): Prom
 }
 
 function retryDelay(response: Response): number {
-  const retryAfter = Number(response.headers.get("retry-after"));
-  return Number.isFinite(retryAfter) ? Math.min(2_000, Math.max(100, retryAfter * 1_000)) : 500;
+  const value = response.headers.get("retry-after");
+  if (!value) return 500;
+  const seconds = /^\d+(?:\.\d+)?$/.test(value) ? Number(value) : (Date.parse(value) - Date.now()) / 1_000;
+  return Number.isFinite(seconds) ? Math.max(100, seconds * 1_000) : 500;
 }
 
 export async function fetchJson<T = any>(url: string, options: FetchOptions = {}): Promise<T> {
@@ -63,7 +66,10 @@ export async function fetchJson<T = any>(url: string, options: FetchOptions = {}
         signal: controller.signal,
       });
       if (response.status === 429 && attempt < retries) {
-        await new Promise((resolve) => setTimeout(resolve, retryDelay(response)));
+        const delay = retryDelay(response);
+        await response.body?.cancel();
+        if (delay > 2_000) throw new FetchError("HTTP 429: Retry-After exceeds the bounded retry window", url, 429);
+        await new Promise((resolve) => setTimeout(resolve, delay));
         continue;
       }
       if (!response.ok) throw new FetchError(`HTTP ${response.status}`, url, response.status);
@@ -107,6 +113,7 @@ export async function mapWithConcurrency<T, R>(
   concurrency: number,
   mapper: (item: T, index: number) => Promise<R>,
 ): Promise<R[]> {
+  if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new Error("concurrency must be a positive integer");
   const results = new Array<R>(items.length);
   let next = 0;
   async function worker(): Promise<void> {

@@ -6,8 +6,8 @@ name and URL: https://models-labyrinth.vercel.app/api/v1.
 
 The repository includes a source-aware catalog and model-selection atlas covering models, provider
 routes, prices, reasoning efforts, benchmark scores, and published runtime
-metrics. The snapshot is refreshed twice a day by GitHub Actions, and API
-reads make no network requests.
+metrics. GitHub Actions schedules refreshes twice a day; publication requires
+the licensing review below. API reads make no network requests.
 
 ## Model-selection skill
 
@@ -26,12 +26,15 @@ does not run models or invent a universal leaderboard score.
 When a ranked answer is useful, its offline selector can calculate a
 task-relative score from exact comparison lanes and user-visible weights. The
 result always exposes observed percentile quality, benchmark coverage,
-confidence, cohort size, and per-lane contributions rather than hiding them in
-one opaque number.
+confidence, cohort size, and per-lane contributions. Confidence is a disclosed
+heuristic, not a statistical confidence interval or a probability of success.
+Scores depend on the filtered cohort and are not comparable between cohorts.
 For explicit quality-versus-price decisions, the selector also computes a
 strict Pareto front for a named or custom workload. It maximizes task-fit,
 minimizes complete estimated cost, applies an optional quality floor first, and
 keeps unknown-cost choices outside the front instead of treating them as free.
+Unknown or incompatible workload limits and unverified quality transfer
+between effort/quantization configurations also remain outside the front.
 The `quality-cost-speed` mode adds median TTFT and output TPS as independent
 objectives—TTFT is minimized and TPS maximized—without hiding them behind one
 speed score. Route-scoped speed is the default; explicit model scope remains an
@@ -65,19 +68,18 @@ upstream APIs/feeds
 ```
 
 `models_db.json` remains the only complete portable snapshot. Deployments
-parse a compact build-time `runtime-query.json` artifact once per Function
+parse a build-time `runtime-query.json` artifact once per Function
 instance, cache the snapshot and query index for the life of that instance, and
 invalidate on a new deployment. The archival JSON is not reparsed on an hourly
-timer. All responses still use CDN cache headers with a one-hour TTL. The
+timer. Successful responses use CDN cache headers with a one-hour TTL;
+errors use `no-store`, and internal error details are not returned. The
 full snapshot stays downloadable as `/api/v1/snapshot.json`.
 
-Streaming JSON parsers and NDJSON are intentionally not used in the hot path:
-an arbitrary filter still has to scan the whole array, so streaming reduces
-peak materialization memory but substantially increases CPU/latency per
-request. SQLite remains a reasonable option if the snapshot grows
-substantially or memory limits become strict, but for the current read-only
-case an indexed in-memory JSON snapshot is faster and has less operational
-complexity.
+The runtime currently materializes a snapshot and builds an in-memory query
+index. The reproducible benchmark below measures this implementation; it does
+not establish superiority over SQLite, NDJSON, or streaming JSON. The runtime
+artifact flattens observations and is not necessarily smaller than a minified
+archive. Monitor both cold-start memory and file sizes before deploying.
 
 ## Sources
 
@@ -95,8 +97,8 @@ Conflicts are not collapsed into an invented single rating.
   AA-derived rows retain their provenance.
 - [Artificial Analysis Data API](https://artificialanalysis.ai/data-api/docs)
   — headline indices, median performance, and pricing when `AA_API_KEY` is
-  available. The key is never stored in git or the snapshot; this deployment
-  is intended for internal use.
+  available. The key is never stored in git or the snapshot. Public
+  redistribution requires an applicable license; see the publication gate.
 - [Artificial Analysis Speech to Text](https://artificialanalysis.ai/speech-to-text/non-streaming)
   — the free API adds the overall AA-WER index for STT models. Provider-level
   price/speed and per-dataset WER remain tier-gated; the adapter keeps that
@@ -105,8 +107,9 @@ Conflicts are not collapsed into an invented single rating.
   provider/model streaming results with semantic WER, transcript success,
   perfect-transcript rate, and TTFS median/P95/P99. The current published set
   is English-only and is consumed from its upstream README table. The adapter
-  also preserves the repository's service-registry keys as aliases, while
-  keeping the published provider/model label as the route identity.
+  also preserves the repository's service-registry keys as aliases. Only a
+  registry-backed, machine-like provider model ID becomes a route; descriptive
+  labels remain unresolved benchmark evidence.
 - [Hugging Face Open ASR Leaderboard](https://github.com/huggingface/open_asr_leaderboard)
   — published short-form and long-form WER/RTFx CSVs, including explicit
   per-language multilingual lanes. The current multilingual CSV publishes
@@ -156,7 +159,7 @@ Conflicts are not collapsed into an invented single rating.
   sources.
 
 The database contains only data from network sources. The project does not run
-local benchmarks, probes, or its own error/latency/cache-hit measurements.
+model evaluations, probes, or its own provider error/latency/cache-hit measurements.
 Therefore, `measurements[]` is populated only when an upstream source actually
 publishes the corresponding facts.
 
@@ -207,7 +210,7 @@ All collection endpoints return an envelope with `data` and `meta`:
 - `GET /api/v1/facets` — discover available capability, effort, quantization, modality, and source values.
 - `GET /api/v1/providers`
 - `GET /api/v1/benchmarks?kind=benchmark&q=terminal` — canonical benchmark catalog; `kind` accepts `benchmark`, `index`, `aggregate`, or `claim`, while `q` also matches upstream aliases.
-- `GET /api/v1/benchmark-observations?benchmark=coding.terminalBench21&effort=high` — canonical paginated observations with a stable `lane_id`. Defaults to `scope=available`. `sort=score` is allowed only inside one comparison lane.
+- `GET /api/v1/benchmark-observations?benchmark=coding.terminalBench21&effort=high` — canonical paginated observations with a `lane_id`. Defaults to `scope=available`. `sort=score` requires one comparison lane and a known or explicitly supplied score direction.
 - `GET /api/v1/profiles`
 - `GET /api/v1/health`
 - `GET /api/v1/schema` — JSON Schema for the complete `models_db.json`.
@@ -215,7 +218,10 @@ All collection endpoints return an envelope with `data` and `meta`:
 
 `/models`, `/offers`, `/facets`, and `/benchmark-observations` default to
 `scope=available`: canonical models with at least one active, unexpired offer
-whose evidence is no older than 36 hours at `generated_at`. Release age is not
+whose availability evidence is no older than 36 hours at `generated_at`.
+Pricing-only sources cannot establish availability or freshen an old catalog
+observation; their offers have `status: "unknown"`. A catalog's explicit
+`absent` status takes precedence over a pricing supplement. Release age is not
 an availability signal. `scope=all` returns the complete historical and
 unresolved catalog. Responses include `meta.scope` and `meta.excluded_count`.
 `sort=updated`
@@ -228,7 +234,9 @@ modality, quantization, source, benchmark, open weights, minimum context,
 supported parameters, runtime/cache presence, release-date bounds, and sorting.
 When provider, capability, effort, quantization, context, runtime, cache, or
 supported-parameter constraints are supplied together, one offer must satisfy
-all of them. Use `view=summary` for broad candidate discovery; fetch full
+all of them. Summaries and facets describe offers eligible for the requested
+scope; they do not use an excluded route to prove capabilities or context.
+Use `view=summary` for broad candidate discovery; fetch full
 records only for the shortlist. Summary pages are capped at 100 rows;
 full-record pages are capped at 10 to stay safely below serverless response
 limits. Repeated or comma-separated capabilities are ANDed. Repeated
@@ -248,29 +256,65 @@ required dimension or tier cannot be resolved, the total is `null` and
 `missing_dimensions` names exactly what is missing. The estimate is not
 measured cost or a latency prediction.
 
+`input_tokens` is the total prompt per request, including cache reads and
+writes. Read tokens are `input_tokens × cached_input_ratio`; read + write must
+not exceed total input. Ordinary input is the remaining part. A cache write
+may replace the ordinary input charge (`cache_write_billing: "full_rate"`, as
+for Claude) or add a storage surcharge to it (`"surcharge"`, as for Gemini on
+OpenRouter). Missing billing semantics remain unknown. Named profiles are
+illustrative assumptions, not measured cache hit rates.
+
+Each costed offer includes `workload_compatibility`. Budget filters admit only
+known compatible workloads; `sort=cost` puts compatible routes before unknown
+or incompatible routes. Time-based and unsupported volume pricing remain
+unknown. OpenRouter context overrides use strict `min_prompt_tokens` thresholds
+and last-match-wins rules per price dimension; returned prices already include
+any advertised discount.
+
 Benchmark observations keep comparison conditions attached. A comparison lane
-is the canonical benchmark plus metric, unit, variant, effort, evaluator,
-dataset version, and configuration; the API exposes it as `lane_id`. Sorting
-by score is a client error unless the result set is a single comparison lane.
+is the canonical benchmark plus evidence source, metric, unit, variant,
+effort, evaluator, dataset version, and configuration. Sorting by score is a
+client error unless the result set is a single comparison lane. WER and Brier
+score are lower-is-better; Brier Index is higher-is-better. An unspecified
+metric such as `score` requires `direction=higher` or `direction=lower` unless
+the observation declares its direction. Conflicting directions are rejected.
+
+The August 2026 review added source identity to lane hashing. Previously saved
+lane IDs must be rediscovered; do not reuse them across this migration. The
+offline scorer rejects claim/aggregate rows and preserves missing scores,
+sample counts, uncertainty, and per-lane evidence instead of treating gaps as
+measured zeroes.
 
 Vercel Functions have a 4.5 MB response-body limit, so collection pages are
 limited to 100 items. For complete offline analysis, use the static
 `/api/v1/snapshot.json` and `/api/v1/schema.json` on GitHub Pages or Vercel.
-`vercel.json` runs the static build on deploy and includes `runtime-query.json`
+`vercel.json` checks types and publication rights before building, and includes `runtime-query.json`
 in the dynamic API function bundle. The full snapshot is served as a static
 file, not through a Function. When `SNAPSHOT_DOWNLOAD_URL` is set, the snapshot
 redirect can point directly to a GitHub/GitHub Pages URL. Health and the
-downloaded snapshot share one `content_hash`.
+downloaded snapshot share one `content_hash` and generation. Readers recompute
+SHA-256 over schema version, workload profiles, benchmark definitions and
+models; timestamps and source statuses are checked separately. A matching
+declared hash alone is insufficient.
+
+Local Vercel uploads exclude generated `public/` and `runtime-query.json`;
+the deployment build recreates both from the tracked archive. Do not upload
+duplicate generated copies against the platform's source-upload size budget.
 
 ## Local development
+
+Use Node 24.x. Deterministic checks do not load `.env` or contact providers.
 
 ```bash
 npm install
 npm run update:db       # network refresh; AA uses .env when configured
 npm run typecheck
-npm test                # deterministic tests
+npm run check           # typecheck, rebuild generated files, deterministic tests
+npm test                # rebuild generated files, deterministic tests
 npm run test:live       # opt-in public API smoke tests
 npm run build:static    # public/api/v1/* for GitHub Pages
+npm run benchmark       # local query timings; no model/API calls
+npm run check:publication # explicit redistribution preflight
 ```
 
 Copy `.env.example` to `.env`. Never commit real keys:
@@ -283,10 +327,28 @@ OPENROUTER_ENDPOINT_CAP=120
 OPENROUTER_ENDPOINT_CONCURRENCY=6
 ```
 
-If a source is temporarily unavailable, its status becomes `error` or
-`skipped` and previous data is preserved. An empty catalog is treated as an
-error; if all sources fail, the file is not replaced. A new snapshot is
-validated first, then written through a temporary file and atomic rename.
+`update:db` and `test:live` explicitly load `.env` when present. To refresh only
+public sources without loading that file or using inherited keys:
+
+```bash
+env -u AA_API_KEY -u OPENROUTER_API_KEY node --import tsx scripts/update-db.ts
+```
+
+If a source is unavailable, its status becomes `error` or `skipped` and its
+previous projection is preserved, including its last successful record count.
+Empty, truncated, malformed, and accidentally partial complete collections
+fail visibly. A partial refresh retains statuses of sources not attempted.
+If all sources fail, the file is not replaced. Status-only changes are persisted.
+Each successful source is validated before merging, then the complete snapshot
+is validated and written using a unique temporary file, fsync and atomic rename.
+
+`metadata_by_source` and multi-source offers' `source_projections` let refresh
+remove withdrawn fields from just their owner. Legacy mixed metadata without
+field ownership is discarded conservatively on replacement, not assigned to a
+surviving source. Benchmark aliases do not confer ownership of a definition.
+OpenRouter endpoint refreshes rotate by last attempt, including empty/error
+results. An endpoint response resolving to a different model release is rejected;
+listing dates and tokenizer names are not model release dates or families.
 
 Speech observations are intentionally not interchangeable with text-model
 quality scores. STT WER is lower-is-better and carries its dataset/language
@@ -298,9 +360,29 @@ provider availability or a live route unless an offer is separately present.
 
 `.github/workflows/refresh.yml` runs at `03:17` and `15:17` UTC and can also be
 started manually. Add `AA_API_KEY` and, if needed, `OPENROUTER_API_KEY` as
-repository or environment secrets. The workflow refreshes the data, runs the
-tests, builds the static projection, commits a changed `models_db.json`, and
-publishes GitHub Pages in the same job.
+repository or environment secrets if their use is authorized. The workflow
+checks types, refreshes data, rebuilds and tests the projection, checks
+publication rights, then commits a changed `models_db.json` and publishes
+GitHub Pages. `.github/workflows/check.yml` runs deterministic checks for every
+push and pull request with read-only repository permissions.
+
+### Publication gate
+
+This repository and its static endpoints can be public. Artificial Analysis
+distinguishes internal API access from redistribution rights in its
+[Data API terms](https://artificialanalysis.ai/data-api). The repository does
+not establish which license its operator holds. `check:publication` examines
+retained evidence, derived-source markers, and evaluator provenance, including
+AA STT and data retained after a skipped refresh. Removing the API key does not
+remove those data.
+
+Only after an applicable redistribution license is confirmed should an operator
+set `AA_REDISTRIBUTION_LICENSE_CONFIRMED=1` in the deployment environment and
+the matching GitHub Actions repository variable. Without confirmation, the
+automated workflow stops before push/Pages and Vercel stops before publishing;
+local checks and `build:static` remain available. This gate is not access
+control: it does not protect existing Git history, already-public artifacts,
+manual pushes, or prebuilt deployments. Do not bypass it merely to make CI green.
 
 ParseBench and ExtractBench are ordinary registered adapters, so both CSVs are
 refetched on every scheduled run without any additional secret or workflow
@@ -333,22 +415,22 @@ GitHub Pages cannot perform arbitrary server-side filtering; clients can
 download the snapshot and schema and filter locally. Vercel provides the same
 query layer dynamically.
 
-## Format benchmark
+## Reproducible query benchmark
 
-A local smoke benchmark on the original snapshot before full pagination
-(6,773 models, Node 24, macOS) produced the following warm-list estimates for
-`provider=openai&capability=tools`. Snapshot size and catalog cardinality change
-with every refresh, so these figures are comparative guidance, not an SLA:
+```bash
+npm run build:static
+npm run benchmark -- --iterations 100 --warmup 5 --output /tmp/model-query-benchmark.json
+```
 
-| Option | Warm list | Characteristic |
-| --- | ---: | --- |
-| Full JSON + linear filter | ~1.1 ms | Simple, but scans nested offers repeatedly |
-| Full JSON + query index | ~0.08 ms | Selected hot path; JSON is parsed once on cold start |
-| NDJSON + streaming scan | ~77 ms | Low materialization, but scans the file for every arbitrary filter |
-| SQLite + indexed facets | ~4.8 ms | Lower memory and fast id lookup, but more complex and slower for this list query |
+The harness uses a fresh Node process per artifact and records snapshot hash,
+generation, Node/tsx/platform versions, pretty/minified archive and runtime
+sizes, load plus validation time, index construction, first query, warm p50/p95,
+serialization time, response size, and RSS. Cases cover model summaries, costed
+offers, facets and a single score lane. It makes no network requests. OS page
+cache is uncontrolled: these are process-cold, not disk-cold measurements.
 
-The current `models_db.json` is roughly 60 MB on disk; a plain Node parse in a
-separate process measured about 303 MB peak RSS. This is a one-time cost per
-Vercel Function instance, not per request. The current Vercel Hobby static-file
-limit is 100 MB. If the file grows to several hundred megabytes, the next step
-is SQLite or prebuilt byte-range/index storage.
+Results describe the local catalog implementation, not model quality,
+provider latency, serverless cold starts, or CDN performance. No flaky timing
+threshold is imposed in CI. Historical SQLite/streaming comparisons without a
+reproducible harness were removed. See the [review report](docs/review-2026-08-31.md)
+and [recorded measurements](docs/review-2026-08-31-benchmark.json).

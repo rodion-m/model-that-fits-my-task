@@ -54,9 +54,11 @@ export function validateDecision(document) {
     requireStatus(recommendation?.quality_transfer, STATUSES.transfer, `${at}.quality_transfer`, errors);
     requireText(recommendation?.quality_transfer?.evidence, `${at}.quality_transfer.evidence`, errors);
     requireOwn(recommendation?.quality_transfer, "lane_id", `${at}.quality_transfer.lane_id`, errors);
+    if (recommendation?.quality_transfer?.status === "exact") requireText(recommendation.quality_transfer.lane_id, `${at}.quality_transfer.lane_id`, errors);
 
     requireStatus(recommendation?.cost, STATUSES.cost, `${at}.cost`, errors);
     requireText(recommendation?.cost?.assumptions, `${at}.cost.assumptions`, errors);
+    if (recommendation?.cost?.status === "estimated") requireRange(recommendation.cost.estimated_cost_usd, `${at}.cost.estimated_cost_usd`, errors, 0, Number.MAX_VALUE);
     requireText(recommendation?.tradeoff, `${at}.tradeoff`, errors);
     validateOperationalValidation(
       recommendation?.operational_validation,
@@ -68,7 +70,7 @@ export function validateDecision(document) {
     if (Object.hasOwn(recommendation ?? {}, "task_fit")) validateTaskFit(recommendation.task_fit, `${at}.task_fit`, errors);
     if (!Array.isArray(recommendation?.sources) || recommendation.sources.length === 0) {
       errors.push(`${at}.sources must be a non-empty array`);
-    }
+    } else recommendation.sources.forEach((source, sourceIndex) => requireText(source, `${at}.sources[${sourceIndex}]`, errors));
   });
   return errors;
 }
@@ -131,12 +133,14 @@ function validateOperationalValidation(value, offerStatus, workloadKind, path, e
   if (value?.status === "completed") {
     requireNonNegativeInteger(value?.observations?.attempted_requests, `${path}.observations.attempted_requests`, errors, 1);
     requireNonNegativeInteger(value?.observations?.http_429_count, `${path}.observations.http_429_count`, errors, 0);
+    if (value?.observations?.http_429_count > value?.observations?.attempted_requests) errors.push(`${path}.observations.http_429_count cannot exceed attempted_requests`);
+    if (value?.observations?.attempted_requests < value.sequential_requests + value.parallel_requests) errors.push(`${path}.observations.attempted_requests is smaller than the completed plan`);
   }
 }
 
 function validateTaskFit(value, path, errors) {
   for (const field of ["aggregate_score", "observed_score", "coverage", "confidence"]) {
-    if (typeof value?.[field] !== "number" || !Number.isFinite(value[field])) errors.push(`${path}.${field} must be a finite number`);
+    requireRange(value?.[field], `${path}.${field}`, errors, 0, ["coverage", "confidence"].includes(field) ? 1 : 100);
   }
   if (!Array.isArray(value?.contributions) || value.contributions.length === 0) {
     errors.push(`${path}.contributions must be a non-empty array`);
@@ -169,7 +173,11 @@ function requireOwn(value, field, path, errors) {
 }
 
 function requireNonNegativeInteger(value, path, errors, minimum) {
-  if (!Number.isInteger(value) || value < minimum) errors.push(`${path} must be an integer >= ${minimum}`);
+  if (!Number.isSafeInteger(value) || value < minimum) errors.push(`${path} must be a safe integer >= ${minimum}`);
+}
+
+function requireRange(value, path, errors, minimum, maximum) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < minimum || value > maximum) errors.push(`${path} must be a finite number between ${minimum} and ${maximum}`);
 }
 
 async function main(path) {

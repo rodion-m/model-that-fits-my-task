@@ -1,6 +1,6 @@
 import type { Offer, SourceRecord, SourceResult } from "../types.js";
 import { fetchJson } from "../http.js";
-import { normalizeMillionPricing } from "../price.js";
+import { cacheWriteBilling, normalizeMillionPricing } from "../price.js";
 import { baseRecord, mergeSourceRecord, newRecordMap, offer } from "./common.js";
 import { capabilitiesFromParameters, evidence, reasoningSupport, record, stringValue } from "../source-utils.js";
 import { arrayOfStrings, asRecord, boolValue, numberValue } from "../utils.js";
@@ -35,26 +35,25 @@ export async function collectModelsDev(options: { fetchImpl?: typeof fetch } = {
       contextTokens: model.limit?.context,
       maxOutputTokens: model.limit?.output,
       modalities: model.modalities,
-      parameters: model.tool_call || model.structured_output ? [
-        ...(model.tool_call ? ["tools"] : []),
-        ...(model.structured_output ? ["structured_outputs"] : []),
-      ] : undefined,
-      reasoning: typeof model.reasoning === "boolean" ? { supported: model.reasoning } : model.reasoning_options ?? model.reasoning,
+      parameters: declaredParameters(model),
+      reasoning: modelReasoning(model),
       fetchedAt,
       url: MODELS_DEV_URL,
       evidenceFields: ["metadata", "capabilities", "limits"],
     });
+    normalized.capabilities = declaredCapabilities(model);
     normalized.evidence = [evidence("models_dev", MODELS_DEV_URL, fetchedAt, ["metadata", "capabilities", "limits", "reasoning_options"])];
     normalized.id = normalized.id || id;
     records.set(normalized.id, normalized);
   }
+  const canonicalModels = new Map(records);
   for (const [providerKey, providerValue] of providerEntries) {
     const provider = record(providerValue);
     const providerName = stringValue(provider.name) ?? providerKey;
     for (const [modelKey, value] of Object.entries(asRecord(provider.models))) {
       const providerModel = record(value);
       const providerModelId = stringValue(providerModel.id) ?? modelKey;
-      const modelId = findModelId(providerModel, modelKey, records, providerKey);
+      const modelId = findModelId(providerModel, modelKey, canonicalModels, providerKey);
       const existing = records.get(modelId);
       const sourceModel = existing ?? baseRecord({
         sourceId: "models_dev",
@@ -67,20 +66,16 @@ export async function collectModelsDev(options: { fetchImpl?: typeof fetch } = {
         contextTokens: providerModel.limit?.context,
         maxOutputTokens: providerModel.limit?.output,
         modalities: providerModel.modalities,
-        parameters: providerModel.tool_call || providerModel.structured_output ? ["tools", "structured_outputs"] : undefined,
-        reasoning: providerModel.reasoning_options ?? providerModel.reasoning,
+        parameters: declaredParameters(providerModel),
+        reasoning: modelReasoning(providerModel),
         fetchedAt,
         url: MODELS_DEV_URL,
         evidenceFields: ["provider", "pricing", "capabilities"],
       });
-      const params = arrayOfStrings(providerModel.supported_parameters ?? providerModel.parameters);
-      const capabilities = {
-        ...capabilitiesFromParameters(params),
-        tools: boolValue(providerModel.tool_call) ?? (params.length > 0 ? params.includes("tools") : null),
-        structured_outputs: boolValue(providerModel.structured_output) ?? (params.length > 0 ? params.includes("structured_outputs") : null),
-        reasoning: typeof providerModel.reasoning === "boolean" ? providerModel.reasoning : null,
-      };
-      const reasoning = providerModel.reasoning_options ?? providerModel.reasoning;
+      sourceModel.id = modelId;
+      const params = declaredParameters(providerModel);
+      const capabilities = declaredCapabilities(providerModel);
+      const reasoning = modelReasoning(providerModel);
       const reasoningEntry = reasoning !== undefined
         ? reasoningSupport("models_dev", typeof reasoning === "boolean" ? { supported: reasoning } : reasoning, fetchedAt, MODELS_DEV_URL, params)
         : undefined;
@@ -89,16 +84,18 @@ export async function collectModelsDev(options: { fetchImpl?: typeof fetch } = {
         providerId: providerKey,
         providerName,
         providerModelId,
+        status: providerModel.status === "deprecated" ? "absent" : "active",
         contextTokens: providerModel.limit?.context,
         maxOutputTokens: providerModel.limit?.output,
         supportedParameters: params,
         capabilities,
-        reasoningEfforts: arrayOfStrings(providerModel.reasoning_options?.supported_efforts ?? providerModel.reasoning_options?.efforts),
+        reasoningEfforts: reasoningEntry?.efforts,
         dataPolicy: providerModel.data_policy,
-        pricing: normalizeMillionPricing(providerModel.cost),
+        pricing: normalizeMillionPricing(providerModel.cost, cacheWriteBilling(modelId, "models_dev")),
         evidence: [evidence("models_dev", MODELS_DEV_URL, fetchedAt, ["provider", "pricing", "capabilities", "limits"])],
       });
       const extra: Partial<SourceRecord> = {
+        capabilities,
         offers: [providerOffer],
         ...(reasoningEntry ? { reasoning: [reasoningEntry] } : {}),
         evidence: [evidence("models_dev", MODELS_DEV_URL, fetchedAt, ["provider", "pricing", "capabilities"])],
@@ -115,11 +112,42 @@ export async function collectModelsDev(options: { fetchImpl?: typeof fetch } = {
   };
 }
 
+function declaredParameters(model: Record<string, any>): string[] {
+  return [...new Set([
+    ...arrayOfStrings(model.supported_parameters ?? model.parameters),
+    ...(model.tool_call === true ? ["tools"] : []),
+    ...(model.structured_output === true ? ["structured_outputs"] : []),
+  ])];
+}
+
+function declaredCapabilities(model: Record<string, any>): Record<string, boolean | null> {
+  const declared = capabilitiesFromParameters(declaredParameters(model));
+  return {
+    ...declared,
+    tools: boolValue(model.tool_call) ?? declared.tools,
+    structured_outputs: boolValue(model.structured_output) ?? declared.structured_outputs,
+    reasoning: boolValue(model.reasoning) ?? null,
+  };
+}
+
+function modelReasoning(model: Record<string, any>): Record<string, unknown> | undefined {
+  const options = model.reasoning_options;
+  if (options === undefined && model.reasoning === undefined) return undefined;
+  if (!Array.isArray(options)) return { ...asRecord(options ?? model.reasoning), ...(typeof model.reasoning === "boolean" ? { supported: model.reasoning } : {}) };
+  const controls = options.map(record);
+  return {
+    supported: boolValue(model.reasoning) ?? (controls.length > 0 ? true : null),
+    efforts: controls.filter((control) => control.type === "effort").flatMap((control) => arrayOfStrings(control.values)),
+    controls: controls.flatMap((control) => stringValue(control.type) ? [String(control.type)] : []),
+  };
+}
+
 function findModelId(providerModel: Record<string, any>, modelKey: string, records: Map<string, SourceRecord>, providerKey: string): string {
-  const candidates = [providerModel.id, modelKey, `${providerKey}/${modelKey}`].filter(Boolean).map(String);
+  const candidates = [`${providerKey}/${providerModel.id ?? modelKey}`, providerModel.id, modelKey].filter(Boolean).map(String);
   for (const candidate of candidates) {
-    const direct = [...records.keys()].find((id) => id === candidate || id.endsWith(`/${candidate}`));
-    if (direct) return direct;
+    if (records.has(candidate)) return candidate;
   }
+  const suffixMatches = [...records.keys()].filter((id) => candidates.some((candidate) => id.endsWith(`/${candidate}`)));
+  if (suffixMatches.length === 1) return suffixMatches[0];
   return `${providerKey}/${modelKey}`.toLowerCase();
 }

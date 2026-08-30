@@ -1,7 +1,11 @@
+import { scoreDirection } from "./benchmark-semantics.mjs";
+
 export function scoreCandidates(candidates, requestedDimensions, coveragePenalty = 1) {
   if (requestedDimensions.length === 0) return null;
   const dimensions = resolveDimensions(candidates, requestedDimensions);
   const totalWeight = dimensions.reduce((sum, dimension) => sum + dimension.weight, 0);
+  if (!Number.isFinite(totalWeight) || totalWeight <= 0 || dimensions.some((dimension) => !Number.isFinite(dimension.weight) || dimension.weight <= 0)) throw new Error("score weights must have a finite positive sum");
+  if (!Number.isFinite(coveragePenalty) || coveragePenalty <= 0) throw new Error("coverage penalty must be finite and positive");
   const utilitiesByLane = new Map(dimensions.map((dimension) => [
     dimension.lane_id,
     scoreLane(candidates, dimension),
@@ -26,7 +30,7 @@ export function parseScoreDimension(value) {
   return {
     target: match[1].toLowerCase(),
     weight: match[2] === undefined ? 1 : parsePositiveNumber(match[2], "--score weight"),
-    direction: (match[3] ?? "higher").toLowerCase(),
+    direction: match[3]?.toLowerCase(),
   };
 }
 
@@ -56,19 +60,29 @@ function resolveDimension(observations, request) {
 }
 
 function dimension(request, observation) {
+  if (["aggregate", "claim"].includes(observation.kind)) throw new Error(`${observation.kind} scores are not independent ranking evidence`);
   return {
     lane_id: observation.lane_id,
     benchmark_id: observation.benchmark_id,
     weight: request.weight,
-    direction: request.direction,
+    direction: scoreDirection(observation, request.direction),
+    effort: observation.effort ?? null,
+    variant: observation.variant ?? null,
+    configuration: observation.configuration ?? {},
   };
 }
 
 function scoreLane(candidates, dimension) {
   const cohort = candidates.flatMap((candidate) => {
-    const observation = representativeObservation(candidate.observations.filter((row) => row.lane_id === dimension.lane_id));
-    return observation && Number.isFinite(Number(observation.value))
-      ? [{ modelId: candidate.canonical_model_id, observation, value: Number(observation.value) }]
+    const matching = candidate.observations.filter((row) => row.lane_id === dimension.lane_id);
+    for (const row of matching) {
+      if (["aggregate", "claim"].includes(row.kind)) throw new Error(`${row.kind} scores are not independent ranking evidence`);
+      scoreDirection(row, dimension.direction);
+    }
+    const observation = representativeObservation(matching);
+    if (observation) scoreDirection(observation, dimension.direction);
+    return observation && Number.isFinite(observation.value)
+      ? [{ modelId: candidate.canonical_model_id, observation, value: observation.value }]
       : [];
   });
   const utilities = percentileUtilities(cohort.map((row) => row.value), dimension.direction);
@@ -88,9 +102,10 @@ function scoreCandidate(candidate, dimensions, utilitiesByLane, totalWeight, cov
     if (!scored) return { ...dimension, status: "missing" };
     const evidenceConfidence = evidenceReliability(scored.observation.evidence?.status);
     const cohortConfidence = Math.min(1, Math.max(0, scored.cohort_size - 1) / 4);
-    coveredWeight += dimension.weight;
-    weightedUtility += dimension.weight * scored.utility;
-    weightedConfidence += dimension.weight * evidenceConfidence * cohortConfidence;
+    const weight = dimension.weight / totalWeight;
+    coveredWeight += weight;
+    weightedUtility += weight * scored.utility;
+    weightedConfidence += weight * evidenceConfidence * cohortConfidence;
     return {
       ...dimension,
       status: "scored",
@@ -100,21 +115,25 @@ function scoreCandidate(candidate, dimensions, utilitiesByLane, totalWeight, cov
       percentile_utility: round(scored.utility),
       cohort_size: scored.cohort_size,
       evidence_status: scored.observation.evidence?.status ?? "unknown",
+      sample_count: scored.observation.sample_count ?? null,
+      evidence: scored.observation.evidence,
+      uncertainty_metrics: scored.observation.metrics ?? {},
     };
   });
-  const coverage = coveredWeight / totalWeight;
+  const coverage = coveredWeight;
   const observedScore = coveredWeight > 0 ? weightedUtility / coveredWeight : null;
   return {
     aggregate_score: observedScore === null ? null : round(observedScore * coverage ** coveragePenalty),
     observed_score: observedScore === null ? null : round(observedScore),
     coverage: round(coverage),
     confidence: round(coveredWeight > 0 ? coverage * weightedConfidence / coveredWeight : 0),
+    confidence_basis: "heuristic evidence provenance and cohort size, not a statistical confidence level",
     contributions,
   };
 }
 
 function representativeObservation(observations) {
-  return [...observations].sort((left, right) =>
+  return observations.filter((row) => Number.isFinite(row.value)).sort((left, right) =>
     evidenceReliability(right.evidence?.status) - evidenceReliability(left.evidence?.status)
       || String(right.evidence?.fetched_at ?? "").localeCompare(String(left.evidence?.fetched_at ?? ""))
       || String(left.evidence?.source_id ?? "").localeCompare(String(right.evidence?.source_id ?? "")))[0];

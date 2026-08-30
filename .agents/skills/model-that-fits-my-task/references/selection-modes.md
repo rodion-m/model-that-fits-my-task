@@ -15,6 +15,8 @@ For `competitive`, establish the quality floor before looking at price. Use the 
 
 For “best quality at the lowest price,” build a two-objective front after that gate: maximize the disclosed task-fit score and minimize estimated cost for the user's full workload. A point is dominated only when another eligible `model × offer × configuration` is at least as good on quality, no more expensive, and strictly better on one objective. Return the whole front by default. Choose one point only after applying an explicit budget, minimum quality, or disclosed quality-to-cost preference. Keep incomplete-cost choices outside the mathematical front and label them unranked; unknown is not zero cost.
 
-When speed is material, use `quality-cost-speed` and keep median TTFT and median output TPS as separate objectives: minimize TTFT and maximize TPS. Do not compress them into one speed score or combine values from different routes, windows, percentiles, or observations. Offer scope is the provider-selection default; model scope is an explicit approximation and cannot prove route speed.
+Unknown or incompatible workload limits, and unverified transfer between evaluated and offered effort/quantization, also remain unranked. They must not dominate routes with verified compatibility.
+
+When speed is material, use `quality-cost-speed` and keep median TTFT and median output TPS as separate objectives: minimize TTFT and maximize TPS. Do not compress them into one speed score or combine values from different routes, windows, percentiles, or observations. Offer scope is the provider-selection default; model scope is an explicit approximation and cannot prove route speed. TTFA and speech TTFS are not substitutes for TTFT.
 
 Do not build `competitive` by first listing frontier models and adding cheap models. Do not build `frontier` by filtering the available catalog by release date. Both require current, task-relevant quality evidence.

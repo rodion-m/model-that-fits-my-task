@@ -1,3 +1,5 @@
+import { estimateWorkloadCost, workloadCompatibility } from "./workload-cost.mjs";
+
 export function qualityCostPareto(candidates, snapshot, options) {
   const workload = resolveWorkload(snapshot.workload_profiles ?? [], options);
   const includesSpeed = options.pareto === "quality-cost-speed";
@@ -20,8 +22,10 @@ export function qualityCostPareto(candidates, snapshot, options) {
     }
     for (const offer of candidate.matching_offers) {
       const cost = estimateWorkloadCost(offer, workload);
+      const compatibility = workloadCompatibility(offer, workload);
       const speed = includesSpeed ? representativeSpeed(candidate, offer, options.speedScope) : null;
       for (const reasoningEffort of configurationsForOffer(offer, options.efforts)) {
+        const transfer = qualityTransfer(candidate, offer, reasoningEffort);
         const choice = {
           canonical_model_id: candidate.canonical_model_id,
           name: candidate.name,
@@ -34,12 +38,16 @@ export function qualityCostPareto(candidates, snapshot, options) {
           quality_score: quality,
           quality_coverage: candidate.task_fit.coverage,
           quality_confidence: candidate.task_fit.confidence,
+          quality_transfer: transfer,
+          workload_compatibility: compatibility,
           estimated_cost_usd: cost.estimated_cost_usd,
           cost_components: cost.components,
           pricing_evidence: offer.evidence ?? [],
           ...(speed ?? {}),
         };
-        if (cost.estimated_cost_usd === null) {
+        if (transfer.status !== "exact" || compatibility.status !== "compatible") {
+          unranked.push({ ...choice, unranked_reason: [...transfer.reasons, ...compatibility.reasons].join("; ") });
+        } else if (cost.estimated_cost_usd === null) {
           unranked.push({ ...choice, unranked_reason: `cost is incomplete: ${cost.missing_dimensions.join(", ")}` });
         } else if (includesSpeed && speed === null) {
           unranked.push({ ...choice, unranked_reason: `speed is incomplete: median TTFT and TPS are required at ${options.speedScope} scope` });
@@ -90,7 +98,12 @@ function groupEquivalentChoices(choices, includesSpeed) {
   const groups = new Map();
   for (const choice of choices) {
     const key = JSON.stringify([
+      choice.canonical_model_id,
       choice.quality_score,
+      choice.quality_coverage,
+      choice.quality_confidence,
+      choice.quality_transfer,
+      choice.workload_compatibility,
       choice.estimated_cost_usd,
       ...(includesSpeed ? [choice.ttft_seconds, choice.throughput_tokens_per_second, choice.speed_scope] : []),
     ]);
@@ -102,12 +115,15 @@ function groupEquivalentChoices(choices, includesSpeed) {
     ...group[0],
     equivalent_choice_count: group.length,
     equivalent_offers: group.map((choice) => ({
+      canonical_model_id: choice.canonical_model_id,
       offer_id: choice.offer_id,
       provider_id: choice.provider_id,
       provider_model_id: choice.provider_model_id,
       variant: choice.variant,
       quantization: choice.quantization,
       reasoning_effort: choice.reasoning_effort,
+      pricing_evidence: choice.pricing_evidence,
+      ...(includesSpeed ? { speed_evidence: choice.speed_evidence, speed_window: choice.speed_window } : {}),
     })),
   }));
 }
@@ -115,6 +131,7 @@ function groupEquivalentChoices(choices, includesSpeed) {
 function representativeSpeed(candidate, offer, scope) {
   const observations = scope === "offer" ? offer.runtime ?? [] : candidate.runtime_observations ?? [];
   return observations.flatMap((observation) => {
+    if (observation.scope !== scope) return [];
     const ttft = runtimeMetric(observation, "ttft");
     const throughput = runtimeMetric(observation, "throughput");
     if (!Number.isFinite(ttft) || ttft < 0 || !Number.isFinite(throughput) || throughput <= 0) return [];
@@ -135,8 +152,8 @@ function runtimeMetric(observation, metric) {
   if (Number.isFinite(direct)) return Number(direct);
   const metrics = observation.metrics ?? {};
   const keys = metric === "ttft"
-    ? ["median-time-to-first-token-seconds", "median-time-to-first-answer-token-seconds", "median_time_to_first_token_seconds", "ttft"]
-    : ["median-output-tokens-per-second", "median_output_tokens_per_second", "tokens_per_second"];
+    ? ["median-time-to-first-token-seconds", "median_time_to_first_token_seconds"]
+    : ["median-output-tokens-per-second", "median_output_tokens_per_second"];
   const value = keys.map((key) => metrics[key]).find(Number.isFinite);
   return value === undefined ? null : Number(value);
 }
@@ -158,64 +175,6 @@ function resolveWorkload(profiles, options) {
   };
 }
 
-function estimateWorkloadCost(offer, profile) {
-  const cachedInput = profile.input_tokens * profile.cached_input_ratio;
-  const uncachedInput = profile.input_tokens - cachedInput;
-  const components = {};
-  const missing = new Set();
-  if (cachedInput > 0 && profile.cache_write_tokens === undefined) missing.add("cache_write_tokens");
-
-  addCost(offer, "input", uncachedInput, profile.input_tokens, components, missing);
-  addCost(offer, "cache_read", cachedInput, profile.input_tokens, components, missing);
-  addCost(offer, "cache_write", profile.cache_write_tokens ?? 0, profile.input_tokens, components, missing);
-  addCost(offer, "output", profile.output_tokens, profile.input_tokens, components, missing);
-  addCost(offer, "reasoning", profile.reasoning_tokens ?? 0, profile.input_tokens, components, missing);
-  if ((offer.pricing ?? []).some((point) => point.dimension === "request")) {
-    addCost(offer, "request", 1, profile.input_tokens, components, missing);
-  }
-
-  if (missing.size > 0) {
-    return { estimated_cost_usd: null, missing_dimensions: [...missing].sort(), components };
-  }
-  const requests = profile.requests_per_task;
-  const scaled = Object.fromEntries(Object.entries(components).map(([key, value]) => [key, precise(value * requests)]));
-  return {
-    estimated_cost_usd: precise(Object.values(scaled).reduce((sum, value) => sum + value, 0)),
-    missing_dimensions: [],
-    components: scaled,
-  };
-}
-
-function addCost(offer, dimension, units, contextTokens, components, missing) {
-  if (units <= 0) return;
-  const rate = rateFor(offer.pricing ?? [], dimension, contextTokens);
-  if (rate === null) {
-    missing.add(dimension);
-    components[dimension] = null;
-    return;
-  }
-  components[dimension] = rate * units;
-}
-
-function rateFor(pricing, dimension, contextTokens) {
-  const points = pricing.filter((point) => point.dimension === dimension);
-  if (points.some((point) => point.kind === "scheduled" || (point.kind === "tiered" && point.tier?.type === "volume"))) return null;
-  const matchingTiers = points.filter((point) => point.kind === "tiered" && point.tier?.type === "context"
-    && contextTokens >= (point.tier.min ?? 0)
-    && (point.tier.max === undefined || contextTokens < point.tier.max));
-  const applicable = matchingTiers.length > 0
-    ? matchingTiers
-    : points.filter((point) => point.kind === "fixed" || point.kind === "variable");
-  if (applicable.length === 0 || applicable.some((point) => !Number.isFinite(point.amount_usd_per_unit))) return null;
-  const rates = applicable.flatMap((point) => {
-    if (point.unit === "million_tokens") return [point.amount_usd_per_unit / 1_000_000];
-    if (point.unit === "token" || point.unit === "request") return [point.amount_usd_per_unit];
-    return [];
-  });
-  if (rates.length === 0) return null;
-  if (rates.some((rate) => Math.abs(rate - rates[0]) > Math.max(1e-15, Math.abs(rates[0]) * 1e-9))) return null;
-  return rates[0];
-}
 
 function nonDominatedFront(choices, ordering) {
   const sorted = [...choices].sort(ordering);
@@ -269,6 +228,22 @@ function configurationsForOffer(offer, requestedEfforts) {
   return requestedEfforts.filter((effort) => supported.has(effort));
 }
 
+function qualityTransfer(candidate, offer, effort) {
+  const incompatible = [];
+  const unknown = [];
+  for (const contribution of candidate.task_fit.contributions ?? []) {
+    if (contribution.status !== "scored") continue;
+    const evaluatedEffort = contribution.effort?.toLowerCase();
+    if (effort && evaluatedEffort && effort !== evaluatedEffort) incompatible.push(`quality was evaluated at effort=${evaluatedEffort}, not ${effort}`);
+    else if ((effort ?? null) !== (evaluatedEffort ?? null)) unknown.push("reasoning effort transfer is unverified");
+    const evaluatedQuantization = contribution.configuration?.quantization?.toLowerCase?.();
+    const offeredQuantization = offer.quantization?.toLowerCase();
+    if (offeredQuantization && evaluatedQuantization && offeredQuantization !== evaluatedQuantization) incompatible.push(`quality was evaluated at quantization=${evaluatedQuantization}, not ${offeredQuantization}`);
+    else if ((offeredQuantization ?? null) !== (evaluatedQuantization ?? null)) unknown.push("quantization impact on quality is unknown");
+  }
+  return { status: incompatible.length > 0 ? "incompatible" : unknown.length > 0 ? "unknown" : "exact", reasons: [...new Set([...incompatible, ...unknown])] };
+}
+
 function unrankedChoice(candidate, offer, reasoningEffort, reason) {
   return {
     canonical_model_id: candidate.canonical_model_id,
@@ -283,8 +258,4 @@ function unrankedChoice(candidate, offer, reasoningEffort, reason) {
     estimated_cost_usd: null,
     unranked_reason: reason,
   };
-}
-
-function precise(value) {
-  return Number(value.toPrecision(12));
 }

@@ -25,8 +25,10 @@ export function evidence(
 export function redactUrl(value: string): string {
   try {
     const url = new URL(value);
-    for (const key of ["key", "api_key", "token", "authorization", "x-api-key"]) {
-      if (url.searchParams.has(key)) url.searchParams.set(key, "[redacted]");
+    if (url.username) url.username = "[redacted]";
+    if (url.password) url.password = "[redacted]";
+    for (const key of [...url.searchParams.keys()]) {
+      if (["key", "apikey", "token", "accesstoken", "authorization", "xapikey"].includes(key.toLowerCase().replaceAll(/[-_]/g, ""))) url.searchParams.set(key, "[redacted]");
     }
     return url.toString();
   } catch {
@@ -76,6 +78,7 @@ export function reasoningSupport(
 ): { source_id: string; supported: boolean | null; mandatory?: boolean; efforts?: string[]; controls?: string[]; evidence: Evidence } {
   const record = asRecord(raw);
   const controls = [...new Set([
+    ...arrayOfStrings(record.controls),
     ...arrayOfStrings(parameters).filter((value) => ["reasoning", "reasoning_effort", "include_reasoning"].includes(value)),
     ...Object.keys(record).filter((key) => ["effort", "budget_tokens", "toggle", "max_tokens"].includes(key)),
   ])].sort();
@@ -101,6 +104,10 @@ export function runtimeFromEndpoint(
   const latency = metricSeries(raw.latency_last_30m ?? raw.latency);
   const throughput = metricSeries(raw.throughput_last_30m ?? raw.throughput);
   const uptime = metricSeries(raw.uptime_last_30m ?? raw.uptime);
+  for (const [statistic, percent] of Object.entries(uptime)) {
+    if (percent < 0 || percent > 100) throw new Error("OpenRouter uptime must be a percentage between 0 and 100");
+    uptime[statistic] = percent / 100;
+  }
   return {
     scope: "offer",
     window: "30m",

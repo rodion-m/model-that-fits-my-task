@@ -1,0 +1,367 @@
+{
+  "review_date": "2026-08-31",
+  "original": {
+    "content_hash": "146c4a5951ec957dcfe59477849b2957accbf6444bfb35a760abbf7c56b9e99b",
+    "model_count": 11080,
+    "offer_count": 9176,
+    "observation_count": 32565,
+    "source_count": 20
+  },
+  "migration": {
+    "uptime_percent_to_fraction": 222,
+    "negative_price_to_unknown": 8,
+    "context_metadata_removed": 98,
+    "context_prices_repaired": 308,
+    "ambiguous_legacy_overrides_to_unknown": 44,
+    "workload_profiles_repaired": 2
+  },
+  "updated": {
+    "status": "ok",
+    "schema_version": "1.0",
+    "generated_at": "2026-08-30T23:01:16.536Z",
+    "content_hash": "54d482eaa0b34212a295e361be324c003cd5b5705505de0c3cd0d67add436acd",
+    "model_count": 12378,
+    "available_model_count": 4998,
+    "all_model_count": 12378,
+    "source_count": 20,
+    "default_scope": "available",
+    "sources": [
+      {
+        "attempted_at": "2026-08-30T22:40:44.425Z",
+        "last_success_at": "2026-08-30T22:40:44.425Z",
+        "record_count": 617,
+        "source_id": "arena",
+        "status": "ok",
+        "url": "https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset",
+        "warning_count": 0,
+        "stale": false
+      },
+      {
+        "attempted_at": "2026-08-30T22:40:44.420Z",
+        "last_success_at": "2026-08-30T21:23:47.574Z",
+        "record_count": 200,
+        "source_id": "artificial_analysis",
+        "status": "skipped",
+        "url": "https://artificialanalysis.ai/api/v2/language/models/free",
+        "warning_count": 1,
+        "stale": false
+      },
+      {
+        "attempted_at": "2026-08-30T22:40:44.420Z",
+        "last_success_at": "2026-08-30T21:23:47.575Z",
+        "record_count": 65,
+        "source_id": "artificial_analysis_stt",
+        "status": "skipped",
+        "url": "https://artificialanalysis.ai/api/v2/media/speech-to-text/models/free",
+        "warning_count": 1,
+        "stale": false
+      },
+      {
+        "attempted_at": "2026-08-30T22:40:44.422Z",
+        "last_success_at": "2026-08-30T22:40:44.422Z",
+        "record_count": 1072,
+        "source_id": "benchgecko",
+        "status": "ok",
+        "url": "https://benchgecko.ai/api/v1/models",
+        "warning_count": 0,
+        "stale": false
+      },
+      {
+        "attempted_at": "2026-08-30T22:40:44.419Z",
+        "last_success_at": "2026-08-30T22:40:44.419Z",
+        "record_count": 402,
+        "source_id": "benchlm",
+        "status": "ok",
+        "url": "https://www.benchlm.ai/data/models.json",
+        "warning_count": 0,
+        "stale": false
+      },
+      {
+        "attempted_at": "2026-08-30T22:40:44.423Z",
+        "last_success_at": "2026-08-30T22:40:44.423Z",
+        "record_count": 2951,
+        "source_id": "cloudprice",
+        "status": "ok",
+        "url": "https://ai.cloudprice.net/api/v1/models",
+        "warning_count": 0,
+        "stale": false
+      },
+      {
+        "attempted_at": "2026-08-30T22:40:44.420Z",
+        "last_success_at": "2026-08-30T22:40:44.420Z",
+        "record_count": 1052,
+        "source_id": "epoch",
+        "status": "ok",
+        "url": "https://epoch.ai/data/notable_ai_models.csv",
+        "warning_count": 0,
+        "stale": false
+      },
+      {
+        "attempted_at": "2026-08-30T22:40:44.425Z",
+        "last_success_at": "2026-08-30T22:40:44.425Z",
+        "record_count": 33,
+        "source_id": "extractbench",
+        "status": "ok",
+        "url": "https://github.com/run-llama/ExtractBench",
+        "warning_count": 0,
+        "stale": false
+      },
+      {
+        "attempted_at": "2026-08-30T22:40:44.427Z",
+        "last_success_at": "2026-08-30T22:40:44.427Z",
+        "record_count": 71,
+        "source_id": "forecastbench",
+        "status": "ok",
+        "url": "https://forecastbench.org/leaderboards/",
+        "warning_count": 0,
+        "stale": false
+      },
+      {
+        "attempted_at": "2026-08-30T22:40:44.424Z",
+        "last_success_at": "2026-08-30T22:40:44.424Z",
+        "record_count": 49,
+        "source_id": "livebench",
+        "status": "ok",
+        "url": "https://github.com/LiveBench/new-livebench/tree/main/public",
+        "warning_count": 0,
+        "stale": false
+      },
+      {
+        "attempted_at": "2026-08-30T22:40:44.423Z",
+        "last_success_at": "2026-08-30T22:40:44.423Z",
+        "record_count": 327,
+        "source_id": "modelcap",
+        "status": "ok",
+        "url": "https://modelcap.ai/data/models.json",
+        "warning_count": 0,
+        "stale": false
+      },
+      {
+        "attempted_at": "2026-08-30T22:40:44.418Z",
+        "last_success_at": "2026-08-30T22:40:44.418Z",
+        "record_count": 4826,
+        "source_id": "models_dev",
+        "status": "ok",
+        "url": "https://models.dev/catalog.json",
+        "warning_count": 0,
+        "stale": false
+      },
+      {
+        "attempted_at": "2026-08-30T22:40:44.425Z",
+        "last_success_at": "2026-08-30T22:40:44.425Z",
+        "record_count": 32,
+        "source_id": "open_asr_en_longform",
+        "status": "ok",
+        "url": "https://raw.githubusercontent.com/huggingface/open_asr_leaderboard/main/scripts/data/en_longform.csv",
+        "warning_count": 0,
+        "stale": false
+      },
+      {
+        "attempted_at": "2026-08-30T22:40:44.424Z",
+        "last_success_at": "2026-08-30T22:40:44.424Z",
+        "record_count": 87,
+        "source_id": "open_asr_en_shortform",
+        "status": "ok",
+        "url": "https://raw.githubusercontent.com/huggingface/open_asr_leaderboard/main/scripts/data/en_shortform.csv",
+        "warning_count": 0,
+        "stale": false
+      },
+      {
+        "attempted_at": "2026-08-30T22:40:44.424Z",
+        "last_success_at": "2026-08-30T22:40:44.424Z",
+        "record_count": 30,
+        "source_id": "open_asr_multilingual",
+        "status": "ok",
+        "url": "https://raw.githubusercontent.com/huggingface/open_asr_leaderboard/main/scripts/data/multilingual.csv",
+        "warning_count": 0,
+        "stale": false
+      },
+      {
+        "attempted_at": "2026-08-30T23:01:01.962Z",
+        "last_success_at": "2026-08-30T23:01:01.962Z",
+        "record_count": 540,
+        "source_id": "openrouter",
+        "status": "ok",
+        "url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "warning_count": 4,
+        "stale": false
+      },
+      {
+        "attempted_at": "2026-08-30T22:40:44.425Z",
+        "last_success_at": "2026-08-30T22:40:44.425Z",
+        "record_count": 91,
+        "source_id": "parsebench",
+        "status": "ok",
+        "url": "https://github.com/run-llama/ParseBench",
+        "warning_count": 0,
+        "stale": false
+      },
+      {
+        "attempted_at": "2026-08-30T22:40:44.424Z",
+        "last_success_at": "2026-08-30T22:40:44.424Z",
+        "record_count": 21,
+        "source_id": "pipecat_stt",
+        "status": "ok",
+        "url": "https://github.com/pipecat-ai/stt-benchmark",
+        "warning_count": 0,
+        "stale": false
+      },
+      {
+        "attempted_at": "2026-08-30T23:01:02.025Z",
+        "last_success_at": "2026-08-30T23:01:02.025Z",
+        "record_count": 1383,
+        "source_id": "portkey",
+        "status": "ok",
+        "url": "https://configs.portkey.ai/pricing/",
+        "warning_count": 0,
+        "stale": false
+      },
+      {
+        "attempted_at": "2026-08-30T22:40:44.423Z",
+        "last_success_at": "2026-08-30T22:40:44.423Z",
+        "record_count": 227,
+        "source_id": "vals",
+        "status": "ok",
+        "url": "https://www.vals.ai/benchmarks",
+        "warning_count": 0,
+        "stale": false
+      }
+    ],
+    "archive_bytes": 90412506,
+    "runtime_bytes": 54819527,
+    "observation_count": 32565,
+    "offer_statuses": {
+      "active": 8613,
+      "absent": 193,
+      "unknown": 1398
+    }
+  },
+  "refresh": {
+    "public_sources_succeeded": 18,
+    "key_gated_sources_retained": [
+      "artificial_analysis",
+      "artificial_analysis_stt"
+    ],
+    "openrouter_endpoint_catalog_rows_checked": 540,
+    "warnings": [
+      {
+        "source_id": "openrouter",
+        "status": "ok",
+        "warnings": [
+          "google/gemini-2.5-pro-preview: OpenRouter endpoint identity mismatch: requested google/gemini-2.5-pro-preview-06-05, resolved google/gemini-2.5-pro",
+          "google/gemini-2.5-pro-preview-05-06: OpenRouter endpoint identity mismatch: requested google/gemini-2.5-pro-preview-03-25, resolved google/gemini-2.5-pro",
+          "google/gemini-2.5-pro-preview: discarded retained OpenRouter endpoint for a different model: google/gemini-2.5-pro",
+          "google/gemini-2.5-pro-preview-05-06: discarded retained OpenRouter endpoint for a different model: google/gemini-2.5-pro"
+        ],
+        "records": 540
+      },
+      {
+        "source_id": "portkey",
+        "status": "ok",
+        "warnings": [],
+        "records": 1383
+      }
+    ]
+  },
+  "anomalies": {
+    "uptime_outside_fraction": 0,
+    "negative_normalized_prices": 0,
+    "context_metadata_as_price": 0,
+    "empty_scheduled_prices": 0,
+    "duplicated_offer_ids_across_models": 0,
+    "foreign_openrouter_endpoint_identities": 0,
+    "deprecated_routes_reactivated_by_pricing": 0
+  },
+  "largest_model_records": [
+    {
+      "id": "anthropic/claude-opus-5",
+      "bytes": 270499
+    },
+    {
+      "id": "anthropic/claude-fable-5",
+      "bytes": 254830
+    },
+    {
+      "id": "anthropic/claude-sonnet-5",
+      "bytes": 246382
+    },
+    {
+      "id": "deepseek/deepseek-v4-pro",
+      "bytes": 244801
+    },
+    {
+      "id": "minimax/minimax-m3",
+      "bytes": 240010
+    },
+    {
+      "id": "anthropic/claude-sonnet-4-6",
+      "bytes": 231132
+    },
+    {
+      "id": "deepseek/deepseek-v4-flash-0731",
+      "bytes": 226289
+    },
+    {
+      "id": "anthropic/claude-opus-4-8",
+      "bytes": 223347
+    },
+    {
+      "id": "anthropic/claude-opus-4-7",
+      "bytes": 212059
+    },
+    {
+      "id": "deepseek/deepseek-v4-pro-0813",
+      "bytes": 192121
+    }
+  ],
+  "largest_ten_model_records_bytes": 2341470,
+  "publication": {
+    "restricted_sources": [
+      "artificial_analysis",
+      "artificial_analysis_stt",
+      "derived:artificial-analysis",
+      "evaluator:artificial_analysis"
+    ],
+    "evidence_count": 5899,
+    "license_confirmed_during_review": false,
+    "pushed": false,
+    "deployed": false
+  },
+  "validation": {
+    "deterministic": {
+      "command": "npm run check",
+      "passed": 137,
+      "skipped": 15,
+      "failed": 0
+    },
+    "live_public_sources": {
+      "command": "env -u AA_API_KEY -u OPENROUTER_API_KEY LIVE_TESTS=1 node --import tsx --test test/live.test.ts",
+      "passed": 11,
+      "skipped": 2,
+      "failed": 0
+    },
+    "dependency_audit": {
+      "command": "npm --userconfig=/dev/null audit --json",
+      "vulnerabilities": 0
+    },
+    "publication_gate": {
+      "command": "env -u AA_REDISTRIBUTION_LICENSE_CONFIRMED npm run check:publication",
+      "exit_code": 1,
+      "result": "expected refusal without confirmed redistribution rights"
+    },
+    "landing_page_script": {
+      "method": "Node vm with simulated health responses; no browser",
+      "scenarios": [
+        "success with warnings",
+        "HTTP failure",
+        "malformed payload"
+      ],
+      "passed": 3
+    },
+    "response_budget": {
+      "largest_ten_full_models_bytes": 2341470,
+      "budget_without_envelope_bytes": 4400000,
+      "result": "pass"
+    }
+  }
+}

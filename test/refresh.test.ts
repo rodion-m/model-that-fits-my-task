@@ -51,6 +51,20 @@ test("a successful empty complete catalog is rejected even without a previous pr
   assert.equal(incremental.status, "ok");
 });
 
+test("an invalid normalized source cannot replace retained data or prevent another source updating", async () => {
+  const previous = mergeSnapshots(undefined, [source("invalid", 1), source("healthy", 1)], initialTime);
+  const invalid = source("invalid", 1);
+  invalid.records[0].context_tokens = -1;
+  const healthy = source("healthy", 2);
+  const results = await collectSources(previous, [adapter(invalid), adapter(healthy)]);
+  assert.equal(results[0].status, "error");
+  assert.match(results[0].error ?? "", /context_tokens/);
+  assert.equal(results[1].status, "ok");
+  const merged = mergeSnapshots(previous, results, nextTime);
+  assert.ok(merged.models.some((model) => model.id === "invalid/model-0"));
+  assert.equal(merged.models.filter((model) => model.id.startsWith("healthy/")).length, 2);
+});
+
 test("a partial refresh retains status for sources that were not attempted", () => {
   const first = source("first", 1);
   const second = source("second", 1);

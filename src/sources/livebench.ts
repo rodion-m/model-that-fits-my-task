@@ -171,12 +171,12 @@ function buildRecord(
       model.benchmarks.push(observation(task, value, category, link, sourceModelId, release, cost, tableUrl, fetchedAt));
     }
     const categoryValue = mean(tasks.map((task) => numeric(row[task])).filter((value): value is number => value !== undefined));
-    if (categoryValue !== undefined) model.benchmarks.push(aggregateObservation(`category.${categorySlug(category)}`, categoryValue, category, link, sourceModelId, release, tasks.length, tableUrl, fetchedAt));
+    if (categoryValue !== undefined && tasks.every((task) => numeric(row[task]) !== undefined)) model.benchmarks.push(aggregateObservation(`category.${categorySlug(category)}`, categoryValue, category, link, sourceModelId, release, tasks.length, tableUrl, fetchedAt));
   }
   const categoryValues = Object.entries(categories).map(([category, tasks]) => mean(tasks.map((task) => numeric(row[task])).filter((value): value is number => value !== undefined)));
   const overall = mean(categoryValues.filter((value): value is number => value !== undefined));
-  if (overall !== undefined) model.benchmarks.push(aggregateObservation("overall", overall, "Overall", link, sourceModelId, release, categoryValues.length, tableUrl, fetchedAt));
-  if (cost) addCostMetrics(model, cost, sourceModelId, release, tableUrl, fetchedAt);
+  if (overall !== undefined && Object.values(categories).flat().every((task) => numeric(row[task]) !== undefined)) model.benchmarks.push(aggregateObservation("overall", overall, "Overall", link, sourceModelId, release, categoryValues.length, tableUrl, fetchedAt));
+  if (cost) addCostMetrics(model, cost, categories, sourceModelId, release, tableUrl.replace("/table_", "/cost_"), fetchedAt);
   return model;
 }
 
@@ -189,6 +189,7 @@ function observation(task: string, value: number, category: string, link: LiveBe
     effort: link.effort,
     evaluator: "livebench",
     dataset_version: release,
+    configuration: { score_direction: "higher_is_better" },
     metrics: {
       source_model_id: sourceModelId,
       category,
@@ -208,8 +209,8 @@ function aggregateObservation(task: string, value: number, category: string, lin
     effort: link.effort,
     evaluator: "livebench",
     dataset_version: release,
-    sample_count: sampleCount,
-    metrics: { source_model_id: sourceModelId, category },
+    configuration: { score_direction: "higher_is_better" },
+    metrics: { source_model_id: sourceModelId, category, component_count: sampleCount },
     evidence: evidence("livebench", url, fetchedAt, ["benchmark", "derived_aggregate"], [], "Computed from the official LiveBench task table; not an independent task score."),
   };
 }
@@ -250,7 +251,7 @@ function parseCostRows(text: string): Map<string, Record<string, string>> {
   return new Map(parsed.rows.map((row) => [row.model, row]));
 }
 
-function addCostMetrics(model: SourceRecord, cost: Record<string, string>, sourceModelId: string, release: string, url: string, fetchedAt: string): void {
+function addCostMetrics(model: SourceRecord, cost: Record<string, string>, categories: Record<string, string[]>, sourceModelId: string, release: string, url: string, fetchedAt: string): void {
   const rootMetrics: Record<string, number | string> = {
     source_model_id: sourceModelId,
     release,
@@ -268,9 +269,23 @@ function addCostMetrics(model: SourceRecord, cost: Record<string, string>, sourc
   }
   model.evidence = [...(model.evidence ?? []), evidence("livebench", url, fetchedAt, ["cost", "tokens", "evaluation_configuration"], [], "Evaluation-run economics from the official LiveBench cost file; not a provider route quote.")];
   for (const observation of model.benchmarks ?? []) {
-    const task = observation.benchmark_id.replace(/^livebench\./, "");
-    const taskCost = costMetric(cost, task);
-    observation.metrics = { ...(observation.metrics ?? {}), ...rootMetrics, ...(taskCost ?? {}) };
+    const overall = observation.benchmark_id === "livebench.overall";
+    const tasks = overall ? Object.values(categories).flat()
+      : observation.benchmark_id.startsWith("livebench.category.") ? categories[String(observation.metrics?.category)] ?? []
+      : Object.values(categories).flat().filter((task) => `livebench.${slug(task)}` === observation.benchmark_id);
+    const metrics: Record<string, number | string> = overall ? { ...rootMetrics } : { source_model_id: sourceModelId, release };
+    const rows = tasks.map((task) => ({ total: numeric(cost[task]), questions: numeric(cost[`nq_${task}`]), output: numeric(cost[`out_${task}`]) }));
+    if (rows.length > 0 && rows.every((row) => row.total !== undefined && row.questions !== undefined && row.questions > 0)) {
+      const total = rows.reduce((sum, row) => sum + row.total!, 0);
+      const questions = rows.reduce((sum, row) => sum + row.questions!, 0);
+      metrics.evaluation_cost_usd = total;
+      metrics.question_count = questions;
+      metrics.cost_per_question_usd = total / questions;
+      if (observation.value > 0) metrics.cost_per_successful_task_usd = total / questions / (observation.value / 100);
+      if (!overall && rows.every((row) => row.output !== undefined)) metrics.avg_output_tokens = rows.reduce((sum, row) => sum + row.output! * row.questions!, 0) / questions;
+      if (Number.isSafeInteger(questions)) observation.sample_count = questions;
+    }
+    observation.metrics = { ...(observation.metrics ?? {}), ...metrics };
   }
 }
 

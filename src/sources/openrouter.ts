@@ -1,4 +1,4 @@
-import type { Offer, SourceRecord, SourceResult } from "../types.js";
+import type { Evidence, Offer, SourceRecord, SourceResult } from "../types.js";
 import { fetchJson, mapWithConcurrency } from "../http.js";
 import { canonicalModelId } from "../identity.js";
 import { normalizeOpenRouterPricing } from "../price.js";
@@ -11,7 +11,7 @@ const OPENROUTER_API = "https://openrouter.ai/api/v1";
 
 interface OpenRouterOptions {
   fetchImpl?: typeof fetch;
-  previous?: { models?: Array<{ id: string; offers?: Offer[] }> };
+  previous?: { models?: Array<{ id: string; offers?: Offer[]; evidence?: Evidence[] }> };
   includeEndpoints?: boolean;
   endpointCap?: number;
   endpointConcurrency?: number;
@@ -30,14 +30,31 @@ export async function collectOpenRouter(options: OpenRouterOptions = {}): Promis
   const rows = asArray(payload?.data);
   if (rows.length === 0) throw new Error("OpenRouter catalog returned no models");
   const records = rows.map((row) => normalizeModel(row, fetchedAt));
+  const endpointIdsByModel = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const modelId = normalizedEndpointModelId(stringValue(row.id) ?? stringValue(row.canonical_slug) ?? "unknown");
+    endpointIdsByModel.set(modelId, new Set([...(endpointIdsByModel.get(modelId) ?? []), ...catalogEndpointIds(row)]));
+  }
   const warnings: string[] = [];
   const refreshedEndpointModelIds = new Set<string>();
   const includeEndpoints = options.includeEndpoints ?? process.env.OPENROUTER_ENDPOINTS !== "0";
   if (includeEndpoints) {
     const cap = options.endpointCap ?? positiveEnv("OPENROUTER_ENDPOINT_CAP", 120);
     const concurrency = options.endpointConcurrency ?? positiveEnv("OPENROUTER_ENDPOINT_CONCURRENCY", 6);
+    if (!Number.isSafeInteger(cap) || cap < 0 || !Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 32) throw new Error("OpenRouter endpoint cap must be a nonnegative integer and concurrency must be between 1 and 32");
+    const previousById = new Map(options.previous?.models?.map((model) => [model.id, model]) ?? []);
+    const attemptedAt = (row: any): number => {
+      const modelId = canonicalModelId({ sourceId: "openrouter", rawId: row.id, publisher: row.id?.split?.("/")[0], name: row.name }).id;
+      const previous = previousById.get(modelId);
+      const observations = [...(previous?.evidence ?? []).filter((item) => item.fields?.includes("endpoint_catalog_attempt")),
+        ...(previous?.offers ?? []).flatMap((value) => value.evidence.filter((item) => item.source_id === "openrouter"))];
+      return Math.max(0, ...observations.map((item) => Date.parse(item.fetched_at)).filter(Number.isFinite));
+    };
     const targets = rows
       .filter((row) => stringValue(row?.canonical_slug) || stringValue(row?.id))
+      .map((row) => ({ row, attempted: attemptedAt(row) }))
+      .sort((a, b) => a.attempted - b.attempted || String(a.row.id).localeCompare(String(b.row.id)))
+      .map(({ row }) => row)
       .slice(0, cap);
     const endpointResults = await mapWithConcurrency(targets, concurrency, async (row) => {
       const pathId = stringValue(row.canonical_slug) ?? stringValue(row.id)!;
@@ -51,20 +68,35 @@ export async function collectOpenRouter(options: OpenRouterOptions = {}): Promis
           maxBytes: 2 * 1024 * 1024,
           retries: 0,
         });
-        return { row, url, endpoints: asArray(response?.data?.endpoints ?? response?.endpoints), error: undefined };
+        const endpoints = response?.data?.endpoints ?? response?.endpoints;
+        if (!Array.isArray(endpoints)) throw new Error("OpenRouter endpoint response is missing its endpoints array");
+        const acceptedIds = catalogEndpointIds(row);
+        const resolvedId = stringValue(response?.data?.id ?? response?.id);
+        if (!resolvedId || !acceptedIds.has(normalizedEndpointModelId(resolvedId))) {
+          throw new Error(`OpenRouter endpoint identity mismatch: requested ${pathId}, resolved ${resolvedId ?? "missing"}`);
+        }
+        for (const endpoint of endpoints) {
+          const endpointId = stringValue(endpoint?.model_id);
+          if (!endpointId || !acceptedIds.has(normalizedEndpointModelId(endpointId))) {
+            throw new Error(`OpenRouter endpoint identity mismatch: requested ${pathId}, endpoint ${endpointId ?? "missing"}`);
+          }
+        }
+        return { row, url, endpoints, error: undefined };
       } catch (error) {
         return { row, url, endpoints: [], error: error instanceof Error ? error.message : String(error) };
       }
     });
     const byId = new Map(records.map((record) => [record.id, record]));
     for (const result of endpointResults) {
+      const identity = canonicalModelId({ sourceId: "openrouter", rawId: result.row.id, publisher: result.row.id?.split?.("/")[0], name: result.row.name });
+      const target = byId.get(identity.id);
+      if (!target) continue;
+      target.evidence?.push(evidence("openrouter", result.url, fetchedAt, ["endpoint_catalog_attempt"], [],
+        result.error ? "Endpoint refresh failed; retained offers keep their original observation timestamps." : "Endpoint catalog checked, including an explicitly empty result."));
       if (result.error) {
         warnings.push(`${stringValue(result.row.id) ?? "unknown"}: ${result.error}`);
         continue;
       }
-      const identity = canonicalModelId({ sourceId: "openrouter", rawId: result.row.id, publisher: result.row.id?.split?.("/")[0], name: result.row.name });
-      const target = byId.get(identity.id);
-      if (!target) continue;
       refreshedEndpointModelIds.add(identity.id);
       for (const endpoint of result.endpoints) {
         const endpointRecord = record(endpoint);
@@ -93,7 +125,7 @@ export async function collectOpenRouter(options: OpenRouterOptions = {}): Promis
           },
           reasoningEfforts: arrayOfStrings(result.row?.reasoning?.supported_efforts),
           dataPolicy,
-          pricing: normalizeOpenRouterPricing(endpointRecord.pricing ?? result.row.pricing),
+          pricing: normalizeOpenRouterPricing(endpointRecord.pricing ?? result.row.pricing, identity.id),
           runtime: [runtime],
           evidence: [evidence("openrouter", result.url, fetchedAt, ["provider", "quantization", "pricing", "runtime", "supported_parameters"])],
         });
@@ -101,14 +133,14 @@ export async function collectOpenRouter(options: OpenRouterOptions = {}): Promis
       }
     }
   }
-  preservePreviousEndpointOffers(records, options.previous, refreshedEndpointModelIds);
+  preservePreviousEndpointOffers(records, options.previous, refreshedEndpointModelIds, endpointIdsByModel, warnings);
   return {
     source_id: "openrouter",
     url: OPENROUTER_MODELS_URL,
     fetched_at: fetchedAt,
     status: "ok",
     records,
-    warnings,
+    warnings: [...new Set(warnings)],
     replace_previous: true,
   };
 }
@@ -117,6 +149,8 @@ function preservePreviousEndpointOffers(
   records: SourceRecord[],
   previous: OpenRouterOptions["previous"],
   refreshedModelIds: Set<string>,
+  endpointIdsByModel: Map<string, Set<string>>,
+  warnings: string[],
 ): void {
   if (!previous?.models) return;
   const previousById = new Map(previous.models.map((model) => [model.id, model]));
@@ -124,12 +158,30 @@ function preservePreviousEndpointOffers(
     if (refreshedModelIds.has(current.id)) continue;
     const previousModel = previousById.get(current.id);
     if (!previousModel) continue;
+    if (!current.evidence?.some((item) => item.fields?.includes("endpoint_catalog_attempt"))) {
+      current.evidence = [...(current.evidence ?? []), ...(previousModel.evidence ?? []).filter((item) => item.source_id === "openrouter" && item.fields?.includes("endpoint_catalog_attempt"))];
+    }
     const existingIds = new Set((current.offers ?? []).map((value) => value.id));
-    const retained = (previousModel.offers ?? []).filter((value) =>
-      !existingIds.has(value.id) && value.evidence.some((item) => item.source_id === "openrouter")
-    );
+    const retained = (previousModel.offers ?? []).flatMap((value) => {
+      const projection = value.source_projections?.openrouter
+        ?? (value.evidence.every((item) => item.source_id === "openrouter") ? value : undefined);
+      if (projection && !endpointIdsByModel.get(current.id)?.has(normalizedEndpointModelId(projection.provider_model_id))) {
+        warnings.push(`${current.id}: discarded retained OpenRouter endpoint for a different model: ${projection.provider_model_id}`);
+        return [];
+      }
+      return projection && !existingIds.has(projection.id) ? [projection] : [];
+    });
     current.offers = [...(current.offers ?? []), ...structuredClone(retained)];
   }
+}
+
+function normalizedEndpointModelId(id: string): string {
+  return canonicalModelId({ sourceId: "openrouter", rawId: id }).id;
+}
+
+function catalogEndpointIds(row: any): Set<string> {
+  return new Set([stringValue(row?.id), stringValue(row?.canonical_slug)]
+    .filter((id): id is string => id !== undefined).map(normalizedEndpointModelId));
 }
 
 function normalizeModel(row: any, fetchedAt: string): SourceRecord {
@@ -140,8 +192,6 @@ function normalizeModel(row: any, fetchedAt: string): SourceRecord {
     rawId: id,
     publisher,
     name: row?.name,
-    family: row?.architecture?.tokenizer,
-    releaseDate: row?.created ? new Date(Number(row.created) * 1000).toISOString().slice(0, 10) : undefined,
     contextTokens: row?.context_length,
     maxOutputTokens: row?.top_provider?.max_completion_tokens,
     modalities: row?.architecture,
@@ -159,7 +209,7 @@ function normalizeModel(row: any, fetchedAt: string): SourceRecord {
   ];
   record.id = canonical.id;
   record.pricing_observations = row?.pricing
-    ? [{ pricing: normalizeOpenRouterPricing(row.pricing), evidence: evidence("openrouter", OPENROUTER_MODELS_URL, fetchedAt, ["pricing"], [], "Top-provider catalog pricing; provider-specific offers are separate.") }]
+    ? [{ pricing: normalizeOpenRouterPricing(row.pricing, canonical.id), evidence: evidence("openrouter", OPENROUTER_MODELS_URL, fetchedAt, ["pricing"], [], "Top-provider catalog pricing; provider-specific offers are separate.") }]
     : [];
   const benchmarkValues = flattenBenchmarks(row?.benchmarks);
   record.benchmarks = benchmarkValues.map(({ id: benchmarkId, value }) => ({
@@ -167,7 +217,13 @@ function normalizeModel(row: any, fetchedAt: string): SourceRecord {
     value,
     evidence: evidence("openrouter", OPENROUTER_MODELS_URL, fetchedAt, ["benchmarks"], benchmarkId.startsWith("artificial_analysis") ? ["artificial-analysis"] : []),
   }));
-  record.evidence = [evidence("openrouter", OPENROUTER_MODELS_URL, fetchedAt, ["metadata", "capabilities", "pricing", "benchmarks"]), ...(record.evidence ?? [])];
+  const addedAt = numeric(row?.created);
+  const catalogMetadata = [
+    ...(addedAt === undefined ? [] : [`added_at=${new Date(addedAt * 1000).toISOString()}`]),
+    ...(stringValue(row?.architecture?.tokenizer) ? [`tokenizer=${stringValue(row.architecture.tokenizer)}`] : []),
+  ];
+  record.evidence = [evidence("openrouter", OPENROUTER_MODELS_URL, fetchedAt, ["metadata", "capabilities", "pricing", "benchmarks"], [],
+    catalogMetadata.length > 0 ? `OpenRouter catalog metadata: ${catalogMetadata.join("; ")}.` : undefined), ...(record.evidence ?? [])];
   return record;
 }
 
@@ -186,6 +242,9 @@ function flattenBenchmarks(value: unknown): Array<{ id: string; value: number }>
 }
 
 function positiveEnv(name: string, fallback: number): number {
-  const parsed = Number(process.env[name]);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+  const value = process.env[name];
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(parsed) || parsed < 1) throw new Error(`${name} must be a positive decimal integer`);
+  return parsed;
 }

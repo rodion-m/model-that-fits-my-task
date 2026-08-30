@@ -1,6 +1,6 @@
 import type { BenchmarkDefinition, BenchmarkObservation, Offer, RuntimeObservation, SourceRecord, SourceResult } from "../types.js";
 import { fetchJson, fetchText } from "../http.js";
-import { alias } from "../identity.js";
+import { alias, unresolvedModelId } from "../identity.js";
 import { evidence, mergeCapabilities, numeric, record, stringValue } from "../source-utils.js";
 import { asArray, numberValue, slugify } from "../utils.js";
 import { baseRecord, newRecordMap, offer } from "./common.js";
@@ -34,12 +34,14 @@ export async function collectPipecatStt(options: { fetchImpl?: typeof fetch } = 
   const fetchedAt = new Date().toISOString();
   const [text, servicesText] = await Promise.all([
     fetchText(PIPECAT_STT_URL, { fetchImpl: options.fetchImpl, timeoutMs: 30_000, maxBytes: 512 * 1024 }),
-    fetchText(PIPECAT_STT_SERVICES_URL, { fetchImpl: options.fetchImpl, timeoutMs: 30_000, maxBytes: 512 * 1024 }).catch(() => undefined),
+    fetchText(PIPECAT_STT_SERVICES_URL, { fetchImpl: options.fetchImpl, timeoutMs: 30_000, maxBytes: 512 * 1024 }),
   ]);
   const parsed = parsePipecatResults(text);
   if (parsed.rows.length === 0) throw new Error("Pipecat STT README contained no parseable result rows");
+  if (parsed.skippedRows > 0) throw new Error(`Pipecat STT result table contains ${parsed.skippedRows} malformed rows; collection is incomplete`);
 
   const serviceKeys = servicesText ? parsePipecatServiceRegistry(servicesText) : new Map<string, string>();
+  if (serviceKeys.size === 0) throw new Error("Pipecat STT service registry contained no model identifiers");
   const records = parsed.rows.map((row) => pipecatRecord(row, parsed, fetchedAt, serviceKeys));
   const definitions = pipecatDefinitions(fetchedAt);
   const warnings = [
@@ -76,7 +78,11 @@ export function parsePipecatResults(text: string): ParsedPipecatStt {
   let skippedRows = 0;
   for (const line of lines.slice(headerIndex + 1)) {
     const cells = pipeCells(line);
-    if (cells.length < headers.length || cells.every((cell) => /^[-: ]+$/.test(cell))) continue;
+    if (!line.startsWith("|") || cells.every((cell) => /^[-: ]+$/.test(cell))) continue;
+    if (cells.length < headers.length) {
+      skippedRows += 1;
+      continue;
+    }
     const row = {
       vendor: cells[index.get("vendor")!],
       model: cells[index.get("model")!],
@@ -163,20 +169,21 @@ function artificialAnalysisSpeechToTextDefinition(fetchedAt: string): BenchmarkD
 
 function pipecatRecord(row: PipecatSttRow, parsed: ParsedPipecatStt, fetchedAt: string, serviceKeys: Map<string, string>): SourceRecord {
   const providerId = speechProviderSlug(row.vendor);
-  const providerModelId = row.model.toLowerCase() === "n/a" ? undefined : speechModelSlug(row.model);
   const serviceKey = serviceKeys.get(registryKey(row.vendor, row.model));
-  const rawId = providerModelId ? `${providerId}/${providerModelId}` : `${providerId}/pipecat-default`;
+  const providerModelId = serviceKey && row.model.toLowerCase() !== "n/a" && /^[a-z0-9][a-z0-9_.:/-]*$/i.test(row.model) ? row.model : undefined;
+  const rawId = providerModelId ? `${providerId}/${providerModelId}` : unresolvedModelId("pipecat_stt", `${row.vendor}/${row.model}`);
   const sourceEvidence = evidence("pipecat_stt", PIPECAT_STT_URL, fetchedAt, ["benchmark", "runtime", "evaluation_configuration"], [], "Published provider/model row from the upstream Pipecat STT README.");
   const normalized = baseRecord({
     sourceId: "pipecat_stt",
     rawId,
     publisher: row.vendor,
-    name: providerModelId ?? row.vendor,
+    name: row.model,
     modalities: { input: ["audio"], output: ["text"] },
     fetchedAt,
     url: PIPECAT_STT_URL,
     evidenceFields: ["benchmark", "runtime", "evaluation_configuration"],
   });
+  if (!providerModelId) normalized.identity_confidence = "unresolved";
   normalized.aliases = [
     ...(normalized.aliases ?? []),
     alias(`${row.vendor}/${row.model}`, "pipecat_stt", "evaluation_model_id"),
@@ -218,7 +225,8 @@ function pipecatBenchmarks(row: PipecatSttRow, parsed: ParsedPipecatStt, sourceE
     evaluator: "pipecat",
     ...(parsed.dataset ? { dataset_version: parsed.dataset } : {}),
     ...(parsed.sampleCount !== undefined ? { sample_count: parsed.sampleCount } : {}),
-    configuration: { language: "en", track: "streaming", ...(parsed.dataset ? { dataset: parsed.dataset } : {}), ...(serviceKey ? { service_key: serviceKey } : {}) },
+    configuration: { language: "en", track: "streaming", ...(parsed.dataset ? { dataset: parsed.dataset } : {}) },
+    ...(serviceKey ? { metrics: { service_key: serviceKey } } : {}),
     evidence: sourceEvidence,
   } as const;
   return [
@@ -325,12 +333,12 @@ function speechProviderSlug(value: string): string {
   return known[compact] ?? slugify(value);
 }
 
-function speechModelSlug(value: string): string {
-  return slugify(value);
-}
-
 function registryKey(vendor: string, model: string): string {
   return `${vendor.trim().toLowerCase()}\u0000${model.trim().toLowerCase()}`;
+}
+
+function speechModelSlug(value: string): string {
+  return slugify(value);
 }
 
 function withoutCreatorSuffix(value: string, creator: string): string {

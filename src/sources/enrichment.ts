@@ -44,6 +44,7 @@ export async function collectBenchGecko(options: { fetchImpl?: typeof fetch } = 
   const fetchedAt = new Date().toISOString();
   const pages: Array<{ url: string; payload: any }> = [];
   let expectedPages: number | undefined;
+  let complete = false;
   let page = 1;
   for (; page <= 50; page += 1) {
     const url = new URL(BENCHGECKO_URL);
@@ -51,10 +52,14 @@ export async function collectBenchGecko(options: { fetchImpl?: typeof fetch } = 
     url.searchParams.set("limit", "200");
     const payload = await fetchJson<any>(url.toString(), { fetchImpl: options.fetchImpl, timeoutMs: 30_000, maxBytes: 12 * 1024 * 1024 });
     pages.push({ url: url.toString(), payload });
-    expectedPages = numberValue(payload?.meta?.pages) ?? expectedPages;
+    if (payload?.meta?.pages !== undefined) {
+      if (!Number.isSafeInteger(payload.meta.pages) || payload.meta.pages < 1) throw new Error("BenchGecko returned invalid page count");
+      expectedPages = payload.meta.pages;
+    }
     const rows = asArray(payload?.data ?? payload?.models ?? payload);
-    if (expectedPages !== undefined ? page >= expectedPages : rows.length < 200) break;
+    if (expectedPages !== undefined ? page >= expectedPages : rows.length < 200) { complete = true; break; }
   }
+  if (!complete) throw new Error("BenchGecko pagination exceeded 50 pages; collection is incomplete");
   const rows = pages.flatMap(({ payload }) => asArray(payload?.data ?? payload?.models ?? payload));
   if (rows.length === 0) throw new Error("BenchGecko returned no models");
   const records = pages.flatMap(({ url, payload }) => asArray(payload?.data ?? payload?.models ?? payload).map((row) => {
@@ -96,12 +101,14 @@ export async function collectCloudPrice(options: { fetchImpl?: typeof fetch } = 
     const pageUrl = url.toString();
     const payload = await fetchJson<any>(pageUrl, { fetchImpl: options.fetchImpl, timeoutMs: 30_000, maxBytes: 16 * 1024 * 1024 });
     pages.push({ url: pageUrl, payload });
-    hasNext = payload?.pagination?.has_next === true;
+    if (typeof payload?.pagination?.has_next !== "boolean") throw new Error("CloudPrice response omitted pagination.has_next");
+    hasNext = payload.pagination.has_next;
     const returnedToken = stringValue(payload?.pagination?.next_token);
     if (hasNext && (!returnedToken || seenTokens.has(returnedToken))) throw new Error("CloudPrice pagination returned a repeated or empty next_token");
     if (returnedToken) seenTokens.add(returnedToken);
     nextToken = returnedToken;
   }
+  if (hasNext) throw new Error("CloudPrice pagination exceeded 50 pages; collection is incomplete");
   const rows = pages.flatMap(({ payload }) => asArray(payload?.data ?? payload?.models ?? payload));
   if (rows.length === 0) throw new Error("CloudPrice returned no models");
   const records = pages.flatMap(({ url, payload }) => asArray(payload?.data ?? payload?.models ?? payload).map((row) => {
@@ -148,9 +155,9 @@ export async function collectCloudPrice(options: { fetchImpl?: typeof fetch } = 
   return { source_id: "cloudprice", url: CLOUDPRICE_URL, fetched_at: fetchedAt, status: "ok", records: [...newRecordMap(records).values()], warnings };
 }
 
-export async function collectPortkey(options: { fetchImpl?: typeof fetch } = {}): Promise<SourceResult> {
+export async function collectPortkey(options: { fetchImpl?: typeof fetch; providers?: string[] } = {}): Promise<SourceResult> {
   const fetchedAt = new Date().toISOString();
-  const providers = (process.env.PORTKEY_PROVIDERS ?? "anthropic,openai,google,bedrock,vertex-ai,deepseek,mistral-ai,together-ai,groq,openrouter").split(",").map((value) => value.trim()).filter(Boolean);
+  const providers = options.providers ?? (process.env.PORTKEY_PROVIDERS ?? "anthropic,openai,google,bedrock,vertex-ai,deepseek,mistral-ai,together-ai,groq,openrouter").split(",").map((value) => value.trim()).filter(Boolean);
   const results = await mapWithConcurrency(providers, 5, async (provider) => {
     const url = `https://configs.portkey.ai/pricing/${encodeURIComponent(provider)}.json`;
     try {
@@ -161,6 +168,8 @@ export async function collectPortkey(options: { fetchImpl?: typeof fetch } = {})
   });
   const records: SourceRecord[] = [];
   const warnings: string[] = [];
+  const failures = results.filter((result) => result.error);
+  if (failures.length > 0) throw new Error(`Portkey collection is incomplete: ${failures.map((result) => `${result.provider}: ${result.error}`).join("; ")}`);
   for (const result of results) {
     if (!result.payload) {
       warnings.push(`${result.provider}: ${result.error}`);
@@ -171,7 +180,7 @@ export async function collectPortkey(options: { fetchImpl?: typeof fetch } = {})
       const normalized = baseRecord({ sourceId: "portkey", rawId: `${result.provider}/${modelKey}`, publisher: result.provider, name: item.name ?? modelKey, fetchedAt, url: result.url, evidenceFields: ["pricing"] });
       const prices = normalizePortkeyPricing(item);
       if (prices.length === 0) continue;
-      normalized.offers = [offer({ id: `portkey:${result.provider}:${modelKey}`, providerId: result.provider, providerName: result.provider, providerModelId: modelKey, pricing: prices, evidence: [evidence("portkey", result.url, fetchedAt, ["pricing"], [], "Pricing-only supplement.")] })];
+      normalized.offers = [offer({ id: `portkey:${result.provider}:${modelKey}`, providerId: result.provider, providerName: result.provider, providerModelId: modelKey, status: "unknown", pricing: prices, evidence: [evidence("portkey", result.url, fetchedAt, ["pricing"], [], "Pricing-only supplement; availability is unknown.")] })];
       normalized.evidence = [evidence("portkey", result.url, fetchedAt, ["pricing"])];
       records.push(normalized);
     }

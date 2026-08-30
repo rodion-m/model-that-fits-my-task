@@ -52,6 +52,8 @@ export async function collectVals(options: {
     }
   });
   const successful = pages.filter((page): page is ValsPage => "view" in page);
+  const failed = pages.flatMap((page) => "error" in page ? [`${page.slug}: ${page.error}`] : []);
+  if (failed.length > 0) throw new Error(`Vals collection is incomplete: ${failed.join("; ")}`);
   if (successful.length === 0) throw new Error("Vals benchmark pages returned no parseable results");
 
   const records = new Map<string, SourceRecord>();
@@ -122,7 +124,7 @@ export async function collectVals(options: {
     records: [...newRecordMap([...records.values()]).values()],
     benchmark_definitions: definitions,
     warnings: pages.flatMap((page) => "error" in page ? [`${page.slug}: ${page.error}`] : []),
-    replace_previous: true,
+    replace_previous: slugs.length === discovered.length,
   };
 }
 
@@ -255,7 +257,10 @@ function unmatchedValsRecord(rawModelId: string, observation: BenchmarkObservati
 function valsScore(metadata: Record<string, unknown>, task: string, result: Record<string, unknown>): { metric: string; unit: string } {
   const slug = stringValue(metadata.slug ?? metadata.benchmark_id) ?? "unknown";
   const label = stringValue(metadata.accuracy_label);
-  if (label) return { metric: metricName(label), unit: slug === "poker_agent" ? "rating" : "score" };
+  if (slug === "voice-code-bench") {
+    const metrics: Record<string, string> = { overall: "task_success_rate", ctem: "canonical_token_entity_match", wer: "wer" };
+    if (metrics[task]) return { metric: metrics[task], unit: "percent" };
+  }
   if (slug === "programbench") {
     if (task === "partial") return { metric: "raw_pass_rate", unit: "percent" };
     if (task === "almost") return { metric: "almost_resolved_rate", unit: "percent" };
@@ -269,6 +274,7 @@ function valsScore(metadata: Record<string, unknown>, task: string, result: Reco
   if (task === "all_pass") return { metric: "all_pass_rate", unit: "percent" };
   if (task.startsWith("weighted_pass")) return { metric: "weighted_pass_rate", unit: "percent" };
   if (task.includes("pass_rate")) return { metric: "pass_rate", unit: "percent" };
+  if (label) return { metric: metricName(label), unit: slug === "poker_agent" ? "rating" : label.includes("%") ? "percent" : "score" };
   if (String(metadata.industry).toLowerCase() === "index") return { metric: "index_score", unit: "percent" };
   return { metric: result.accuracy !== undefined ? "score" : "value", unit: "percent" };
 }

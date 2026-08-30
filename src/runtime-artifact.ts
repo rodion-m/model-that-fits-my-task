@@ -20,8 +20,13 @@ export function buildRuntimeQueryArtifact(snapshot: Snapshot): RuntimeQueryArtif
 }
 
 export function snapshotFromRuntimeArtifact(artifact: RuntimeQueryArtifact): Snapshot {
+  if (!Array.isArray(artifact.models) || !Array.isArray(artifact.observations)) throw new Error("runtime artifact collections are invalid");
+  const modelIds = new Set(artifact.models.map((model) => model?.id));
+  if (artifact.models.some((model) => !model?.id) || modelIds.size !== artifact.models.length) throw new Error("runtime artifact model IDs must be unique and present");
   const observationsByModel = new Map<string, RuntimeQueryArtifact["observations"]>();
   for (const observation of artifact.observations) {
+    if (!observation || !modelIds.has(observation.model_id)) throw new Error("runtime artifact observation references an unknown model");
+    if (observation.lane_id !== comparisonLaneId(observation)) throw new Error("runtime artifact comparison lane mismatch");
     const current = observationsByModel.get(observation.model_id) ?? [];
     current.push(observation);
     observationsByModel.set(observation.model_id, current);

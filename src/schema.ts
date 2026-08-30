@@ -1,10 +1,9 @@
 import type { Snapshot } from "./types.js";
-import { contentHash } from "./hash.js";
-import { hashableSnapshot } from "./merge.js";
+import { assertSnapshotIntegrity } from "../.agents/skills/model-that-fits-my-task/scripts/snapshot-integrity.mjs";
 
 export const MODELS_DB_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
-  $id: "https://example.invalid/llm-models-db.schema.json",
+  $id: "https://rodion-m.github.io/model-that-fits-my-task/api/v1/schema.json",
   title: "LLM Models Database Snapshot",
   type: "object",
   required: ["schema_version", "generated_at", "content_hash", "workload_profiles", "sources", "benchmarks", "models"],
@@ -38,11 +37,13 @@ export const MODELS_DB_SCHEMA = {
       properties: {
         dimension: { type: "string" },
         unit: { enum: ["token", "million_tokens", "request", "image", "search", "second", "character", "unknown"] },
-        amount_usd_per_unit: { type: ["number", "null"] },
-        raw: {},
+        amount_usd_per_unit: { type: ["number", "null"], minimum: 0 },
+        raw: { type: ["string", "number", "null"] },
         kind: { enum: ["fixed", "variable", "tiered", "scheduled"] },
-        tier: { type: "object" },
-        schedule: { type: "object" },
+        tier: { type: "object", required: ["type"], properties: { type: { enum: ["context", "volume"] }, min: { type: "number", minimum: 0 }, max: { type: "number", minimum: 0 } } },
+        schedule: { type: "object", properties: { utc_days: { type: "array", items: { type: "string" } }, utc_start: { type: "integer", minimum: 0, maximum: 2359 }, utc_end: { type: "integer", minimum: 0, maximum: 2359 } }, description: "UTC times use HHMM. Start is inclusive, end exclusive; end <= start wraps midnight." },
+        override_index: { type: "integer", minimum: 0 },
+        cache_write_billing: { enum: ["full_rate", "surcharge"], description: "Whether cache-write pricing replaces ordinary input billing or adds to it. Missing means unknown." },
       },
       additionalProperties: true,
     },
@@ -52,10 +53,10 @@ export const MODELS_DB_SCHEMA = {
       properties: {
         scope: { enum: ["model", "offer"] },
         window: { type: "string" },
-        latency_seconds: { type: "object", additionalProperties: { type: "number" } },
-        ttft_seconds: { type: "object", additionalProperties: { type: "number" } },
-        throughput_tokens_per_second: { type: "object", additionalProperties: { type: "number" } },
-        uptime_fraction: { type: "object", additionalProperties: { type: "number" } },
+        latency_seconds: { type: "object", additionalProperties: { type: "number", minimum: 0 } },
+        ttft_seconds: { type: "object", additionalProperties: { type: "number", minimum: 0 } },
+        throughput_tokens_per_second: { type: "object", additionalProperties: { type: "number", minimum: 0 } },
+        uptime_fraction: { type: "object", additionalProperties: { type: "number", minimum: 0, maximum: 1 } },
         metrics: { type: "object" },
         evidence: { $ref: "#/$defs/evidence" },
       },
@@ -73,15 +74,17 @@ export const MODELS_DB_SCHEMA = {
         schema_version: { type: "string" },
         scope: { enum: ["available", "all"] },
         excluded_count: { type: "integer", minimum: 0 },
+        score_direction: { enum: ["higher", "lower"] },
       },
       additionalProperties: true,
     },
     comparison_lane: {
       type: "object",
-      description: "Comparable benchmark conditions. A comparison lane is the canonical benchmark_id plus metric, unit, variant, effort, evaluator, dataset_version, and configuration. GET /api/v1/benchmark-observations exposes this as lane_id. Different comparison lanes must not be ranked together.",
+      description: "Comparable benchmark conditions. A comparison lane includes canonical benchmark_id, evidence.source_id, metric, unit, variant, effort, evaluator, dataset_version, and configuration. Independent sources stay separate when their protocols are unknown. Different lanes must not be ranked together.",
       required: ["benchmark_id", "lane_id"],
       properties: {
         benchmark_id: { type: "string" },
+        source_id: { type: ["string", "null"] },
         metric: { type: "string" },
         unit: { type: "string" },
         variant: { type: "string" },
@@ -124,7 +127,7 @@ export const MODELS_DB_SCHEMA = {
         provider_name: { type: "string" },
         provider_model_id: { type: "string" },
         variant: { type: "string" },
-        status: { enum: ["active", "absent"] },
+        status: { enum: ["active", "absent", "unknown"], description: "Pricing-only catalogs cannot establish route availability." },
         expires_at: { type: "string", description: "Upstream expiration date or timestamp for this offer." },
         quantization: { type: "string" },
         context_tokens: { type: "integer", minimum: 0 },
@@ -135,8 +138,9 @@ export const MODELS_DB_SCHEMA = {
         data_policy: { type: "object" },
         pricing: { type: "array", items: { $ref: "#/$defs/price" } },
         runtime: { type: "array", items: { $ref: "#/$defs/runtime" } },
-        measurements: { type: "array", items: { type: "object" } },
+        measurements: { type: "array", items: { $ref: "#/$defs/measurement" } },
         evidence: { type: "array", items: { $ref: "#/$defs/evidence" } },
+        source_projections: { type: "object", additionalProperties: { $ref: "#/$defs/offer_projection" }, description: "Original contributions for offers merged from multiple sources. Used to remove one source without retaining its old fields." },
       },
       additionalProperties: true,
     },
@@ -149,24 +153,46 @@ export const MODELS_DB_SCHEMA = {
         name: { type: "string" },
         creators: { type: "array", items: { type: "string" } },
         family: { type: "string" },
-        aliases: { type: "array", items: { type: "object", required: ["id", "source_id"] } },
+        aliases: { type: "array", items: { type: "object", required: ["id", "source_id"], properties: { id: { type: "string", minLength: 1 }, source_id: { type: "string", minLength: 1 }, kind: { type: "string" } } } },
         release_date: { type: "string" },
         knowledge_cutoff: { type: "string" },
         open_weights: { type: ["boolean", "null"] },
         license: { type: "string" },
-        modalities: { type: "object", required: ["input", "output"], properties: { input: { type: "array" }, output: { type: "array" } } },
+        modalities: { type: "object", required: ["input", "output"], properties: { input: { type: "array", items: { type: "string" } }, output: { type: "array", items: { type: "string" } } } },
         context_tokens: { type: "integer", minimum: 0 },
         max_output_tokens: { type: "integer", minimum: 0 },
         capabilities: { type: "object", additionalProperties: { type: ["boolean", "null"] } },
-        reasoning: { type: "array" },
+        reasoning: { type: "array", items: { $ref: "#/$defs/reasoning" } },
         offers: { type: "array", items: { $ref: "#/$defs/offer" } },
         benchmarks: { type: "array", items: { $ref: "#/$defs/benchmark_observation" } },
-        pricing_observations: { type: "array" },
+        pricing_observations: { type: "array", items: { type: "object", required: ["pricing", "evidence"], properties: { pricing: { type: "array", items: { $ref: "#/$defs/price" } }, evidence: { $ref: "#/$defs/evidence" } } } },
         runtime_observations: { type: "array", items: { $ref: "#/$defs/runtime" } },
-        measurements: { type: "array" },
+        measurements: { type: "array", items: { $ref: "#/$defs/measurement" } },
         evidence: { type: "array", items: { $ref: "#/$defs/evidence" } },
+        metadata_by_source: { type: "object", additionalProperties: { $ref: "#/$defs/model_metadata" }, description: "Source-specific claims from which scalar metadata is recomputed on replacement." },
       },
       additionalProperties: true,
+    },
+    offer_projection: { type: "object", allOf: [{ $ref: "#/$defs/offer" }, { not: { required: ["source_projections"] } }] },
+    model_metadata: {
+      type: "object",
+      properties: {
+        identity_confidence: { $ref: "#/$defs/model/properties/identity_confidence" },
+        name: { type: "string" }, creators: { type: "array", items: { type: "string" } },
+        family: { type: "string" }, release_date: { type: "string" }, knowledge_cutoff: { type: "string" },
+        open_weights: { type: ["boolean", "null"] }, license: { type: "string" },
+        modalities: { $ref: "#/$defs/model/properties/modalities" },
+        context_tokens: { type: "integer", minimum: 0 }, max_output_tokens: { type: "integer", minimum: 0 },
+        capabilities: { type: "object", additionalProperties: { type: ["boolean", "null"] } },
+      },
+    },
+    reasoning: {
+      type: "object", required: ["source_id", "supported", "evidence"],
+      properties: { source_id: { type: "string" }, supported: { type: ["boolean", "null"] }, mandatory: { type: "boolean" }, efforts: { type: "array", items: { type: "string" } }, controls: { type: "array", items: { type: "string" } }, evidence: { $ref: "#/$defs/evidence" } },
+    },
+    measurement: {
+      type: "object", required: ["kind", "offer_id", "status", "metrics", "evidence"],
+      properties: { kind: { const: "measurement" }, offer_id: { type: "string" }, workload_profile_id: { type: "string" }, reasoning_config: { type: "object" }, status: { enum: ["pass", "fail", "partial", "unknown"] }, sample_count: { type: "integer", minimum: 0 }, metrics: { type: "object", additionalProperties: { type: ["number", "string", "boolean", "null"] } }, evidence: { $ref: "#/$defs/evidence" } },
     },
     source_status: {
       type: "object",
@@ -192,19 +218,12 @@ export const MODELS_DB_SCHEMA = {
     workload_profile: {
       type: "object",
       required: ["id", "description", "input_tokens", "cached_input_ratio", "output_tokens", "requests_per_task"],
-      properties: { id: { type: "string" }, description: { type: "string" }, input_tokens: { type: "integer" }, cached_input_ratio: { type: "number", minimum: 0, maximum: 1 }, output_tokens: { type: "integer" }, requests_per_task: { type: "integer", minimum: 1 }, cache_write_tokens: { type: "integer", minimum: 0 }, reasoning_tokens: { type: "integer", minimum: 0 } },
+      properties: { id: { type: "string" }, description: { type: "string" }, input_tokens: { type: "integer", minimum: 0 }, cached_input_ratio: { type: "number", minimum: 0, maximum: 1 }, output_tokens: { type: "integer", minimum: 0 }, requests_per_task: { type: "integer", minimum: 1 }, cache_write_tokens: { type: "integer", minimum: 0 }, reasoning_tokens: { type: "integer", minimum: 0 } },
       additionalProperties: true,
     },
   },
 } as const;
 
 export function assertSnapshotShape(value: unknown): asserts value is Snapshot {
-  if (!value || typeof value !== "object") throw new Error("snapshot must be an object");
-  const snapshot = value as Partial<Snapshot>;
-  if (snapshot.schema_version !== "1.0") throw new Error("snapshot schema_version must be 1.0");
-  if (!Array.isArray(snapshot.models) || !Array.isArray(snapshot.sources) || !Array.isArray(snapshot.benchmarks)) throw new Error("snapshot collections are invalid");
-  for (const model of snapshot.models) {
-    if (!model || typeof model !== "object" || typeof model.id !== "string" || !Array.isArray(model.offers)) throw new Error("invalid model record");
-  }
-  if (snapshot.content_hash && snapshot.content_hash !== contentHash(hashableSnapshot(snapshot as Snapshot))) throw new Error("snapshot content_hash mismatch");
+  assertSnapshotIntegrity(value);
 }

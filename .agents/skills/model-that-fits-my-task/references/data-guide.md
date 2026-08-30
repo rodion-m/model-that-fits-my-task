@@ -26,9 +26,11 @@ The strongest production recommendation names an offer. When only model-level qu
 ## Choose the catalog scope
 
 Selection endpoints default to `scope=available`: canonical identities with at
-least one active, unexpired offer backed by evidence no older than 36 hours at
+least one active, unexpired offer backed by availability evidence no older than 36 hours at
 snapshot generation time. Release age is deliberately irrelevant. This scope
 answers “what appears deployable?”, not “what should I choose?”.
+Fresh price data cannot establish or refresh availability; pricing-only offers
+have `status: "unknown"` and do not overturn a catalog's explicit `absent` state.
 
 Using `available` as the final shortlist is rare; first apply the task's quality
 gate. Use `scope=all` almost exclusively for explicit historical, exhaustive,
@@ -76,16 +78,21 @@ Static GitHub Pages exposes a compact model index and base64url-named individual
 
 ## Comparison lanes
 
-A comparison lane is the exact tuple of canonical benchmark, metric, unit,
+A comparison lane is the exact tuple of canonical benchmark, evidence source, metric, unit,
 variant, effort, evaluator, dataset version, and configuration. The API exposes
 that tuple through `lane_id`. Sort by score only after selecting one lane; a
-mixed-lane score sort is a client error.
+mixed-lane score sort is a client error. WER and Brier score sort ascending;
+Brier Index sorts descending. For an unspecified metric such as `score`, supply
+`direction=higher|lower` or use the observation's declared direction. Conflicting
+directions are errors. Rediscover lane IDs saved before the August 2026 addition
+of source identity to lane hashing.
 
 Two observations with the same benchmark ID are not automatically comparable.
 Never average or median different lanes, and never move a score between model
 versions, batch routes, quantizations, tool modes, or reasoning efforts. Keep
-multiple sources within a lane as separate observations unless the upstream
-methodology explicitly defines an aggregate.
+independent sources in separate lanes even when an evaluator or version is
+missing. Lane equality establishes matching recorded conditions, not proof
+that every undocumented evaluation detail is identical.
 
 ## Field interpretation
 
@@ -111,6 +118,15 @@ rate from `cached_input_ratio`: that field is a workload assumption used for
 cost estimation. Use the operational-validation reference named in `SKILL.md`
 to propose a real repeated-prefix measurement after selection.
 
+Input tokens include the complete prompt: cache reads plus cache writes plus
+ordinary input. `read = input_tokens × cached_input_ratio` and `read + write`
+must not exceed total input. The estimator distinguishes cache-write full
+replacement rates (Claude) from storage surcharges added to input billing
+(Gemini on OpenRouter); undocumented billing semantics remain unknown. Named
+workloads are illustrative, not observations. Applicable context prices follow
+their explicit bounds; unknown scheduled/volume prices do not become zero.
+API budget filters require `workload_compatibility.status: "compatible"`.
+
 Vals business benchmarks add observed task accuracy, run configuration, and
 where published, task-level latency, token counts, and spend. Treat
 `cost_per_test` and `api_cost_usd` as the cost of that evaluation workload, not
@@ -119,8 +135,9 @@ describe the evaluated setup rather than a currently available provider offer.
 
 LiveBench adds release-versioned objective subtasks across reasoning, coding,
 agentic coding, mathematics, data analysis, language, and instruction following.
-Its `effort`, `evaluator`, `dataset_version`, and source model id must remain in
-the comparison lane. Category and overall observations are explicit derived
+Its `effort`, `evaluator`, `dataset_version`, and evaluation conditions must remain in
+the comparison lane; retain source model IDs as provenance, not lane keys that
+would separate every model into a cohort of one. Category and overall observations are explicit derived
 aggregates; do not count them as extra task votes. Its evaluation cost, average
 token, and published input/output price fields describe the benchmark run, not
 a current provider route quote.
@@ -143,8 +160,9 @@ WER and transcript rates are quality signals, while TTFS percentiles describe
 time from end-of-speech to final transcription; TTFS is not TTFT. Open ASR
 publishes model-level English short-form/long-form tracks and a multilingual
 track with separate current CSV lanes for German, French, Italian, Spanish, and
-Portuguese; its RTFx is a fixed-H200 benchmark runtime, not provider API
-throughput. The Artificial Analysis free STT endpoint currently exposes an
+Portuguese; its RTFx is benchmark runtime, not provider API throughput.
+Hardware must be taken from each row; do not assign H200 to rows with no
+published hardware. The Artificial Analysis free STT endpoint currently exposes an
 overall AA-WER index only; do not infer a provider route, price, speed, or
 language score from it. For multilingual work, prefer the exact target-language
 lane, disclose a coverage gap when it is absent, and never treat an aggregate
@@ -153,6 +171,12 @@ average as evidence for every language.
 ## Provenance and confidence
 
 Every important observation should carry `evidence.source_id`, `url`, `fetched_at`, and `status`. `observed` means the adapter read it from that source. `derived` means the source or catalog republished or transformed another source; inspect `derived_from`. `stale` means retained older data.
+
+Inspect timestamps even when evidence is not explicitly labeled stale. Source
+replacement recomputes scalar metadata from `metadata_by_source` and shared
+offers from `source_projections`; a discarded source's claims must not be
+reattributed to another source. An OpenRouter catalog listing timestamp is not
+the model's release date.
 
 `identity_confidence` describes the join, not model quality:
 
@@ -176,11 +200,20 @@ Download both files so field interpretation stays coupled to the data version:
 node scripts/download-snapshot.mjs --out /tmp/models-labyrinth
 ```
 
-The script fetches health first, reuses a local bundle when its content hash
-matches, otherwise downloads schema and snapshot together. It validates root
-shape, counts, content hash, and schema version and writes atomically. It fails
+The script fetches health first and revalidates cached bytes before reuse.
+It checks nested schema shape, recomputes SHA-256, and matches generation,
+counts and source statuses against health. Status-only changes require a new
+generation even if the content hash is unchanged. It fails
 visibly; it does not combine Vercel health with a different GitHub Pages
 snapshot or hide a broken source behind a fallback.
+
+The returned `snapshot_path` and `schema_path` point into an immutable
+`generations/<uuid>/` directory. An atomic `bundle.json` manifest identifies the
+current generation. Read the returned paths, not a legacy `<cache>/snapshot.json`.
+Concurrent downloads cannot mix files. Corrupt-cache recovery is reported by
+`cache_status` and `cache_validation_error`. Old generations are retained so
+in-flight readers stay safe; remove unused generations explicitly when no
+analysis is using them.
 
 For a complex but bounded selection, use the selector instead of writing ad hoc
 one-off parsers:
@@ -203,6 +236,8 @@ It parses the snapshot once, joins only explicit source-proven aliases, requires
 one offer to satisfy all route gates, and groups observations by `lane_id`.
 Records with conflicting release identities are reported as incompatible
 observations rather than silently transferred.
+An exact `--model` ID takes precedence over aliases, and a record with an
+unknown release cannot bridge two different releases through transitive aliases.
 
 To produce a transparent task-specific rank, first inspect the emitted lanes,
 then rerun with exact lane IDs and explicit weights:
@@ -218,8 +253,12 @@ node scripts/select-models.mjs --cache /tmp/models-labyrinth \
 The selector uses tie-aware percentiles within each lane. It emits an observed
 weighted score, evidence coverage, a coverage-adjusted aggregate, confidence,
 cohort sizes, and per-lane contributions. A benchmark name that maps to multiple
-lanes is rejected until one exact lane is chosen. This is a task-relative score,
-not a universal model rating.
+lanes is rejected until one exact lane is chosen. Confidence is a heuristic,
+not a statistical interval or a probability that one model is better. Sample
+counts and reported uncertainty stay attached to contributions, but are not
+used to establish statistical significance. Claim/aggregate rows and nonnumeric
+or missing scores cannot silently enter ranking. Changing cohort membership
+can change percentiles even when raw scores are unchanged.
 
 For an explicit quality-versus-price request, add a complete workload and build
 the non-dominated front after choosing exact comparison lanes:
@@ -241,6 +280,10 @@ keeps `pareto_front` and `pareto_unranked` separate. It never treats missing,
 ambiguous, scheduled, or incomplete prices as zero. The Pareto mode does not
 invent a single “best value” winner: apply a budget or minimum acceptable
 quality to choose one point from the front.
+Choices with unknown or incompatible workload limits, or non-exact quality
+transfer across evaluated and offered effort/quantization, remain unranked.
+Neither unknown evaluated quantization nor unknown offered quantization proves
+an exact match when the other side is known.
 Use `--variant default` when batch, flex, preview, or other route variants are
 not acceptable; omit it only when those variants belong in the trade-off set.
 

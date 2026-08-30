@@ -24,7 +24,7 @@ export function paramsFor(request: ApiRequest): URLSearchParams {
 export function sendJson(response: ApiResponse, body: unknown, status = 200): void {
   response.status(status);
   response.setHeader("content-type", "application/json; charset=utf-8");
-  response.setHeader("cache-control", `public, s-maxage=${CACHE_TTL_SECONDS}, stale-while-revalidate=86400`);
+  response.setHeader("cache-control", status >= 400 ? "no-store" : `public, s-maxage=${CACHE_TTL_SECONDS}, stale-while-revalidate=86400`);
   response.json(body);
 }
 
@@ -36,5 +36,5 @@ export function redirect(response: ApiResponse, location: string, status = 302):
 }
 
 export function sendError(response: ApiResponse, status: number, message: string, parameter?: string): void {
-  sendJson(response, { error: { status, message, ...(parameter ? { parameter } : {}) } }, status);
+  sendJson(response, { error: { status, message: status >= 500 ? "unable to serve catalog" : message, ...(parameter ? { parameter } : {}) } }, status);
 }

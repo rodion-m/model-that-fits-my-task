@@ -23,7 +23,7 @@ Use Vercel for filters and GitHub Pages for full downloads. Start with `/health`
 3. Choose a mode using [selection-modes.md](references/selection-modes.md). Default to `competitive`; for explicit maximum quality, use `frontier` and search only the task-relevant frontier cohort. Use `available` rarely to expand the pool and `all` only for historical catalog access.
 4. Read [benchmark-status-map.md](references/benchmark-status-map.md), then the narrowest playbook: [benchmark-decision-playbook.md](references/benchmark-decision-playbook.md) for general workloads or [business-domain-playbook.md](references/business-domain-playbook.md) for professional domains.
 5. Use `/facets?scope=available` for discovery, then apply provider, capability, effort, context, parameter, runtime, cache, policy, and quantization gates to one `/offers?scope=available` record. Do not prove route compatibility from aggregated model fields.
-6. Use `/benchmark-observations?scope=available` for quality. Compare values only inside one `lane_id`; never average lanes or transfer a score across model versions.
+6. Use `/benchmark-observations?scope=available` for quality. Compare values only inside one source-specific `lane_id`; preserve score direction and never transfer a score across model versions. Use disclosed task weights only for the separate cohort-relative scoring procedure.
 7. Compare surviving `offer × reasoning configuration` pairs on full workload cost and route-scoped operational evidence. Provider choice and effort are decision dimensions, not follow-up details.
 8. For quality/price or quality/price/speed trade-offs, run the corresponding Pareto mode after the quality gate and return the whole front unless a hard threshold selects one point.
 9. Attach the workload-shaped plan from [operational-validation.md](references/operational-validation.md); agentic choices include cache-hit assessment.
@@ -48,9 +48,9 @@ After choosing an OpenRouter model slug, read [openrouter-provider-ranking.md](r
 - A declared capability such as structured outputs or tools is support metadata, not measured reliability.
 - Quantization belongs to an offer. Do not transfer an unquantized score without labeling the quality impact unknown.
 - Compare OpenRouter candidates as `endpoint × effort`, not endpoint alone. Never copy an effort from the incumbent or another model. If the route exposes only Boolean reasoning, say that named effort is unsupported.
-- Cost must reflect input/output, cache read/write, reasoning, requests, tiers, and material non-text media. A `null` estimate is unknown.
+- Cost must reflect input/output, cache read/write billing semantics, reasoning, requests, tiers, and material non-text media. Reads plus writes cannot exceed total input tokens. A `null` estimate is unknown; unknown workload compatibility or quality transfer cannot dominate a verified route in the Pareto front.
 - Prefer observed evidence over derived data and trace `derived_from`. Republished scores do not become independent confirmations.
-- For ranked results, use the selector's cohort-relative task-fit score with exact lanes and explicit weights; report score, coverage, confidence, and contributions.
+- For ranked results, use the selector's cohort-relative task-fit score with exact lanes and explicit weights; report score, coverage, confidence, and contributions. Confidence is a heuristic, not statistical significance; percentiles change with the cohort.
 - Cite only evidence that materially affected the ranking. Do not answer with a benchmark catalog or mention irrelevant legacy scores merely because they exist.
 - Always propose bounded operational validation; never spend credits without explicit authorization.
 

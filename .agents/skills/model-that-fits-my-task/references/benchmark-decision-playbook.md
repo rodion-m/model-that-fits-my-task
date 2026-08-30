@@ -20,7 +20,7 @@ Prefer a primary-current benchmark that reproduces the task, then a qualified or
 | Documents, OCR, charts, UI | OCRBench V2, OmniDocBench 1.5, OfficeQA Pro/GDP.pdf, CharXiv, ScreenSpot-Pro, Vision2Web; MMMU-Pro for breadth | Original files versus renders, OCR/parser/tools, image limits and pricing, judge, version |
 | Enterprise PDF parsing and extraction | ParseBench for agent-ready PDF parsing across tables, charts, faithfulness, semantic formatting, and visual grounding; ExtractBench for schema-guided value F1, length splits, precision/recall, evidence grounding, latency, and cost | Evaluation system/pipeline, document split, schema complexity, source evidence, output contract, grounding level, latency and per-page evaluation cost; pipeline leaderboard rows without a deployable model offer are benchmark evidence only |
 | Multilingual work | MMLU-ProX, INCLUDE, NOVA-63, Global-MMLU, MILU, MaXIFE; SWE-bench Multilingual for repositories | Exact languages, native versus translated items, prompt language, aggregation, tokenizer cost |
-| Speech-to-text and voice agents | English streaming: Pipecat semantic WER, transcript/perfect rates, and TTFS P50/P95/P99; batch/non-streaming: Artificial Analysis AA-WER and matching Open ASR WER/RTFx; multilingual: Open ASR exact language × dataset lanes | Target language, streaming versus batch, provider/model route, semantic versus raw WER, dataset, sample count, and for RTFx the fixed H200 evaluation setup; current published Open ASR multilingual rows cover de/fr/it/es/pt rather than every dataset language |
+| Speech-to-text and voice agents | English streaming: Pipecat semantic WER, transcript/perfect rates, and TTFS P50/P95/P99; batch/non-streaming: Artificial Analysis AA-WER and matching Open ASR WER/RTFx; multilingual: Open ASR exact language × dataset lanes | Target language, streaming versus batch, provider/model route, semantic versus raw WER, dataset, sample count, and row-specific runtime hardware when published; current Open ASR multilingual rows cover de/fr/it/es/pt rather than every dataset language |
 | Creative or subjective writing | Direct writing/preference evaluations such as Lech-Mazur or a relevant arena | Audience and style, output length, judge population; preference scores are audience-dependent |
 
 For finance, legal, healthcare, education, public services, office artifacts, SaaS automation, customer service, HR, IT operations, cybersecurity, consulting, or modernization, return to the route map and use the business-domain playbook instead.
@@ -61,7 +61,10 @@ aggregate_score = observed_score × coverage ^ coverage_penalty
 Use `coverage_penalty=1` unless the user explicitly prefers a more tolerant or
 more conservative evidence policy. Missing evidence lowers coverage; it is not a
 measurement of poor performance. `confidence` also reflects cohort size and
-whether evidence is observed, derived, or claimed. Always show observed score,
+whether evidence is observed or derived; claim and aggregate rows are rejected.
+Confidence is a heuristic, not a statistical interval or success probability.
+Empirical percentiles depend on the cohort, and small score differences do not
+establish significance even when published sample counts are attached. Always show observed score,
 coverage, confidence, cohort sizes, and contributions beside the aggregate.
 
 Example after discovering exact lane IDs:

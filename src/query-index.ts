@@ -44,6 +44,7 @@ export interface QueryIndex {
   byId: Map<string, Model>;
   byAlias: Map<string, Model | undefined>;
   providers: Array<Record<string, unknown>>;
+  providersAvailable: Array<Record<string, unknown>>;
   benchmarks: Array<Record<string, unknown>>;
   facets: Facets;
   facetsAll: Facets;
@@ -84,6 +85,7 @@ export function queryIndex(snapshot: Snapshot): QueryIndex {
     byId,
     byAlias,
     providers: buildProviders(models),
+    providersAvailable: buildProviders(models, true),
     benchmarks: buildBenchmarks(models, snapshot),
     facets: buildFacets(models.filter((row) => row.inAvailableScope), true),
     facetsAll: buildFacets(models),
@@ -108,16 +110,13 @@ function buildFacets(models: IndexedModel[], availableOnly = false): Facets {
   };
 
   for (const row of models) {
-    for (const capability of trueKeys(row.model.capabilities)) add(capabilities, capability, row.model.id);
     for (const modality of row.model.modalities.input) add(modalities, `input:${modality}`, row.model.id);
     for (const modality of row.model.modalities.output) add(modalities, `output:${modality}`, row.model.id);
     for (const source of row.sources) add(sources, source, row.model.id);
     for (const indexedOffer of row.indexedOffers) {
       if (availableOnly && !indexedOffer.inAvailableScope) continue;
       const offer = indexedOffer.offer;
-      const offerCapabilities = new Set(trueKeys(offer.capabilities));
-      if (offer.reasoning_efforts.length > 0) offerCapabilities.add("reasoning");
-      for (const capability of offerCapabilities) add(capabilities, capability, row.model.id, true);
+      for (const capability of indexedOffer.capabilities) add(capabilities, capability, row.model.id, true);
       for (const effort of offer.reasoning_efforts) add(efforts, effort, row.model.id, true);
       if (offer.quantization) add(quantizations, offer.quantization, row.model.id, true);
     }
@@ -207,9 +206,11 @@ function indexOffer(row: IndexedModel, offer: Offer, generatedAt: string): Index
   };
 }
 
-function buildProviders(models: IndexedModel[]): Array<Record<string, unknown>> {
+function buildProviders(models: IndexedModel[], availableOnly = false): Array<Record<string, unknown>> {
   const providers = new Map<string, { provider_id: string; provider_name?: string; model_ids: Set<string>; offer_count: number; quantizations: Set<string> }>();
-  for (const row of models) for (const offer of row.model.offers) {
+  for (const row of models) for (const indexedOffer of row.indexedOffers) {
+    if (availableOnly && !indexedOffer.inAvailableScope) continue;
+    const offer = indexedOffer.offer;
     const current = providers.get(offer.provider_id) ?? { provider_id: offer.provider_id, provider_name: offer.provider_name, model_ids: new Set<string>(), offer_count: 0, quantizations: new Set<string>() };
     current.model_ids.add(row.model.id);
     current.offer_count += 1;

@@ -1,5 +1,6 @@
 import { DEFAULT_LIMIT, MAX_LIMIT, WORKLOAD_PROFILES } from "./constants.js";
 import type { WorkloadProfile } from "./types.js";
+import { validateWorkload } from "./cost.js";
 
 export type QueryScope = "available" | "all";
 
@@ -47,14 +48,14 @@ export function parseBoolean(value: string | undefined, parameter: string): bool
 export function parseNonNegative(value: string | undefined, parameter: string): number | undefined {
   if (value === undefined) return undefined;
   const result = Number(value);
-  if (!Number.isFinite(result) || result < 0) throw new QueryInputError(parameter, `${parameter} must be a non-negative number`);
+  if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(value) || !Number.isFinite(result) || result < 0) throw new QueryInputError(parameter, `${parameter} must be a non-negative decimal number`);
   return result;
 }
 
 export function parseInteger(value: string | undefined, parameter: string): number | undefined {
   if (value === undefined) return undefined;
   const result = Number(value);
-  if (!Number.isInteger(result) || result < 0) throw new QueryInputError(parameter, `${parameter} must be a non-negative integer`);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(result)) throw new QueryInputError(parameter, `${parameter} must be a non-negative safe decimal integer`);
   return result;
 }
 
@@ -112,7 +113,7 @@ export function resolveWorkloadProfile(get: (key: string) => string | undefined)
     if (hasCustomValues) throw new QueryInputError("profile", "custom workload parameters can only be used with profile=custom");
     const profile = WORKLOAD_PROFILES.find((value) => value.id === profileId);
     if (!profile) throw new QueryInputError("profile", `unknown workload profile: ${profileId}`);
-    return { ...profile, ...overlay };
+    return checkedWorkload({ ...profile, ...overlay });
   }
 
   const inputTokens = requiredNonNegativeInteger(get("input_tokens"), "input_tokens");
@@ -121,7 +122,7 @@ export function resolveWorkloadProfile(get: (key: string) => string | undefined)
   if (cachedInputRatio < 0 || cachedInputRatio > 1) throw new QueryInputError("cached_input_ratio", "cached_input_ratio must be between 0 and 1");
   const requestsPerTask = optionalInteger(get("requests_per_task"), 1, "requests_per_task");
   if (requestsPerTask < 1) throw new QueryInputError("requests_per_task", "requests_per_task must be a positive integer");
-  return {
+  return checkedWorkload({
     id: "custom",
     description: "Caller-supplied workload profile.",
     input_tokens: inputTokens,
@@ -129,7 +130,13 @@ export function resolveWorkloadProfile(get: (key: string) => string | undefined)
     output_tokens: outputTokens,
     requests_per_task: requestsPerTask,
     ...overlay,
-  };
+  });
+}
+
+function checkedWorkload(profile: WorkloadProfile): WorkloadProfile {
+  try { validateWorkload(profile); }
+  catch (error) { throw new QueryInputError("profile", error instanceof Error ? error.message : "invalid workload profile"); }
+  return profile;
 }
 
 function readCostOverlays(get: (key: string) => string | undefined): Pick<WorkloadProfile, "cache_write_tokens" | "reasoning_tokens"> {
@@ -143,21 +150,15 @@ function readCostOverlays(get: (key: string) => string | undefined): Pick<Worklo
 
 function requiredNonNegativeInteger(value: string | undefined, name: string): number {
   if (value === undefined || value.trim() === "") throw new QueryInputError(name, `${name} is required for profile=custom`);
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 0) throw new QueryInputError(name, `${name} must be a non-negative integer`);
-  return parsed;
+  return parseInteger(value, name)!;
 }
 
 function optionalInteger(value: string | undefined, fallback: number, name: string): number {
   if (value === undefined) return fallback;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed)) throw new QueryInputError(name, `${name} must be an integer`);
-  return parsed;
+  return parseInteger(value, name)!;
 }
 
 function optionalNumber(value: string | undefined, fallback: number, name: string): number {
   if (value === undefined) return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) throw new QueryInputError(name, `${name} must be a number`);
-  return parsed;
+  return parseNonNegative(value, name)!;
 }

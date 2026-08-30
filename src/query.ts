@@ -1,11 +1,14 @@
 import { EVIDENCE_STALE_MS, MAX_LIMIT, WORKLOAD_PROFILES } from "./constants.js";
-import { estimateWorkloadCost } from "./cost.js";
+import { estimateWorkloadCost, workloadCompatibility } from "./cost.js";
+import { scoreDirection } from "./lane.js";
 import { queryIndex, type Facets, type IndexedModel, type IndexedOffer } from "./query-index.js";
 import {
   QueryInputError,
   getter,
   parseBoolean,
   parseDate,
+  parseEnum,
+  parseInteger,
   parseModelSort,
   parseNonNegative,
   parseObservationSort,
@@ -51,6 +54,7 @@ export interface FlatOffer extends Offer {
   cost_components?: Record<string, number | null>;
   workload_profile_id?: string;
   workload_profile?: WorkloadProfile;
+  workload_compatibility?: ReturnType<typeof workloadCompatibility>;
 }
 
 export interface FlatBenchmarkObservation extends BenchmarkObservation {
@@ -73,7 +77,7 @@ export function listModels(snapshot: Snapshot, params: URLSearchParams | Record<
   const parameters = valuesFor(params, "supported_parameter");
   const benchmark = get("benchmark")?.toLowerCase();
   const openWeights = parseBoolean(get("open_weights"), "open_weights");
-  const minContext = parseNonNegative(get("min_context"), "min_context");
+  const minContext = parseInteger(get("min_context"), "min_context");
   const hasRuntime = parseBoolean(get("has_runtime"), "has_runtime");
   const hasCachePricing = parseBoolean(get("has_cache_pricing"), "has_cache_pricing");
   const releasedAfter = parseDate(get("released_after"), "released_after");
@@ -100,13 +104,13 @@ export function listModels(snapshot: Snapshot, params: URLSearchParams | Record<
     if (openWeights !== undefined && row.model.open_weights !== openWeights) return false;
     if (releasedAfter && (!row.model.release_date || row.model.release_date.slice(0, 10) < releasedAfter)) return false;
     if (releasedBefore && (!row.model.release_date || row.model.release_date.slice(0, 10) > releasedBefore)) return false;
-    if (!matchesOfferScopedConstraints(row, offerScoped, scope)) return false;
+    if (!matchesOfferScopedConstraints(row, offerScoped, "all")) return false;
     return true;
   });
   const beforeScope = models.length;
-  if (scope === "available") models = models.filter((row) => row.inAvailableScope);
-  models = sortModels(models, sort);
-  const data: Array<Model | ModelSummary> = view === "summary" ? models.map(summarizeModel) : models.map((row) => row.model);
+  if (scope === "available") models = models.filter((row) => row.inAvailableScope && matchesOfferScopedConstraints(row, offerScoped, scope));
+  models = sortModels(models, sort, scope);
+  const data: Array<Model | ModelSummary> = view === "summary" ? models.map((row) => summarizeModel(row, scope)) : models.map((row) => row.model);
   return paginate(data, get("limit"), get("offset"), snapshot, view === "summary" ? MAX_LIMIT : MAX_FULL_MODEL_LIMIT, {
     scope,
     excluded_count: scope === "available" ? beforeScope - models.length : 0,
@@ -114,7 +118,9 @@ export function listModels(snapshot: Snapshot, params: URLSearchParams | Record<
 }
 
 export function getModel(snapshot: Snapshot, id: string): Model | undefined {
-  const decoded = decodeURIComponent(id);
+  let decoded: string;
+  try { decoded = decodeURIComponent(id); }
+  catch { throw new QueryInputError("id", "id must be valid URI-encoded text"); }
   return queryIndex(snapshot).byId.get(decoded) ?? queryIndex(snapshot).byAlias.get(decoded);
 }
 
@@ -130,7 +136,7 @@ export function listOffers(snapshot: Snapshot, params: URLSearchParams | Record<
   const efforts = valuesFor(params, "reasoning_effort");
   const quantizations = valuesFor(params, "quantization");
   const sources = valuesFor(params, "source");
-  const minContext = parseNonNegative(get("min_context"), "min_context");
+  const minContext = parseInteger(get("min_context"), "min_context");
   const hasRuntime = parseBoolean(get("has_runtime"), "has_runtime");
   const hasCachePricing = parseBoolean(get("has_cache_pricing"), "has_cache_pricing");
   const profile = resolveWorkloadProfile(get);
@@ -153,26 +159,31 @@ export function listOffers(snapshot: Snapshot, params: URLSearchParams | Record<
     if (hasCachePricing !== undefined && row.hasCachePricing !== hasCachePricing) return false;
     return true;
   });
-  const beforeScope = indexedOffers.length;
-  if (scope === "available") indexedOffers = indexedOffers.filter((row) => row.inAvailableScope);
-  const excludedCount = scope === "available" ? beforeScope - indexedOffers.length : 0;
-  const costs = new Map<string, ReturnType<typeof estimateWorkloadCost>>();
+  const costs = new Map<IndexedOffer, ReturnType<typeof estimateWorkloadCost>>();
+  const compatibility = new Map<IndexedOffer, ReturnType<typeof workloadCompatibility>>();
   if (profile) {
-    for (const row of indexedOffers) costs.set(row.offer.id, estimateWorkloadCost(row.offer, profile));
+    for (const row of indexedOffers) {
+      costs.set(row, estimateWorkloadCost(row.offer, profile));
+      compatibility.set(row, workloadCompatibility(row.offer, profile));
+    }
     if (maxCost !== undefined) {
       indexedOffers = indexedOffers.filter((row) => {
-        const estimated = costs.get(row.offer.id)?.estimated_cost_usd;
-        return estimated !== null && estimated !== undefined && estimated <= maxCost;
+        const estimated = costs.get(row)?.estimated_cost_usd;
+        return compatibility.get(row)?.status === "compatible" && estimated !== null && estimated !== undefined && estimated <= maxCost;
       });
     }
   }
+  const beforeScope = indexedOffers.length;
+  if (scope === "available") indexedOffers = indexedOffers.filter((row) => row.inAvailableScope);
+  const excludedCount = scope === "available" ? beforeScope - indexedOffers.length : 0;
   const offers = stableSort(indexedOffers.map((row) => {
     if (!profile) return row.flat;
-    const cost = costs.get(row.offer.id)!;
+    const cost = costs.get(row)!;
     return {
       ...row.flat,
       workload_profile_id: profile.id,
       workload_profile: profile,
+      workload_compatibility: compatibility.get(row),
       estimated_cost_usd: cost.estimated_cost_usd,
       missing_dimensions: cost.missing_dimensions,
       cost_components: cost.components,
@@ -180,6 +191,9 @@ export function listOffers(snapshot: Snapshot, params: URLSearchParams | Record<
   }), (a, b) => {
     if (sort === "context") return (b.context_tokens ?? 0) - (a.context_tokens ?? 0) || a.id.localeCompare(b.id);
     if (sort === "cost" && profile) {
+      const compatibilityRank = (value: unknown): number => ({ compatible: 0, unknown: 1, incompatible: 2 })[(value as { status: "compatible" | "unknown" | "incompatible" }).status];
+      const compatibilityOrder = compatibilityRank(a.workload_compatibility) - compatibilityRank(b.workload_compatibility);
+      if (compatibilityOrder !== 0) return compatibilityOrder;
       const aCost = nullableNumber(a.estimated_cost_usd);
       const bCost = nullableNumber(b.estimated_cost_usd);
       if (aCost !== bCost) return aCost - bCost;
@@ -196,9 +210,7 @@ export function listOffers(snapshot: Snapshot, params: URLSearchParams | Record<
 export function listProviders(snapshot: Snapshot, params: URLSearchParams | Record<string, string | undefined> = {}): Array<Record<string, unknown>> {
   const scope = parseScope(getter(params)("scope"));
   const index = queryIndex(snapshot);
-  if (scope === "all") return index.providers;
-  const availableProviderIds = new Set(index.offers.filter((row) => row.inAvailableScope).map((row) => row.providerId));
-  return index.providers.filter((provider) => availableProviderIds.has(String(provider.provider_id).toLowerCase()));
+  return scope === "all" ? index.providers : index.providersAvailable;
 }
 
 export function listBenchmarks(snapshot: Snapshot, params: URLSearchParams | Record<string, string | undefined> = {}): Array<Record<string, unknown>> {
@@ -232,6 +244,8 @@ export function listBenchmarkObservations(snapshot: Snapshot, params: URLSearchP
   const sources = valuesFor(params, "source");
   const laneId = get("lane_id");
   const sort = parseObservationSort(get("sort"));
+  const requestedDirection = parseEnum(get("direction"), "direction", ["higher", "lower"]);
+  if (requestedDirection && sort !== "score") throw new QueryInputError("direction", "direction requires sort=score");
   const index = queryIndex(snapshot);
   const availableIds = new Set(index.models.filter((row) => row.inAvailableScope).map((row) => row.model.id));
   let rows = index.observations.filter((row) => {
@@ -253,14 +267,26 @@ export function listBenchmarkObservations(snapshot: Snapshot, params: URLSearchP
   if (sort === "score" && lanes.size > 1) {
     throw new QueryInputError("sort", "sort=score requires a single comparison lane; pass lane_id or filters that isolate one comparison lane");
   }
+  let direction: "higher" | "lower" | undefined;
+  if (sort === "score" && rows.length > 0) {
+    try {
+      const directions = new Set(rows.map((row) => scoreDirection(row, requestedDirection)));
+      if (directions.size !== 1) throw new Error("comparison lane has conflicting score directions");
+      direction = [...directions][0];
+    } catch (error) {
+      throw new QueryInputError("direction", error instanceof Error ? error.message : "unable to resolve score direction");
+    }
+  }
   rows = stableSort(rows, (a, b) => {
-    if (sort === "score") return b.value - a.value || a.model_id.localeCompare(b.model_id);
+    if (sort === "score") return (direction === "lower" ? a.value - b.value : b.value - a.value) || a.model_id.localeCompare(b.model_id);
     return `${a.lane_id}:${a.model_id}:${a.evidence.source_id}`.localeCompare(`${b.lane_id}:${b.model_id}:${b.evidence.source_id}`);
   });
-  return paginate(rows, get("limit"), get("offset"), snapshot, MAX_LIMIT, {
+  const result = paginate(rows, get("limit"), get("offset"), snapshot, MAX_LIMIT, {
     scope,
     excluded_count: scope === "available" ? beforeScope - rows.length : 0,
   });
+  if (direction) result.meta.score_direction = direction;
+  return result;
 }
 
 export function listProfiles(): WorkloadProfile[] {
@@ -368,17 +394,28 @@ function paginate<T>(
   };
 }
 
-function sortModels(models: IndexedModel[], sort: "name" | "context" | "updated" | "released"): IndexedModel[] {
+function sortModels(models: IndexedModel[], sort: "name" | "context" | "updated" | "released", scope: QueryScope): IndexedModel[] {
   return stableSort(models, (a, b) => {
-    if (sort === "context") return (b.model.context_tokens ?? 0) - (a.model.context_tokens ?? 0) || a.model.id.localeCompare(b.model.id);
+    if (sort === "context") return scopedContext(b, scope) - scopedContext(a, scope) || a.model.id.localeCompare(b.model.id);
     if (sort === "updated") return b.latest.localeCompare(a.latest) || a.model.id.localeCompare(b.model.id);
     if (sort === "released") return (b.model.release_date ?? "").localeCompare(a.model.release_date ?? "") || a.model.id.localeCompare(b.model.id);
     return a.model.name.localeCompare(b.model.name) || a.model.id.localeCompare(b.model.id);
   });
 }
 
-function summarizeModel(row: IndexedModel): ModelSummary {
-  const providers = new Set(row.model.offers.map((offer) => offer.provider_id));
+function scopedOffers(row: IndexedModel, scope: QueryScope): IndexedOffer[] {
+  return scope === "all" ? row.indexedOffers : row.indexedOffers.filter((offer) => offer.inAvailableScope);
+}
+
+function scopedContext(row: IndexedModel, scope: QueryScope): number {
+  return Math.max(0, ...scopedOffers(row, scope).map((offer) => offer.offer.context_tokens ?? 0));
+}
+
+function summarizeModel(row: IndexedModel, scope: QueryScope): ModelSummary {
+  const offers = scopedOffers(row, scope);
+  const providers = new Set(offers.map((offer) => offer.offer.provider_id));
+  const context = scopedContext(row, scope);
+  const maxOutput = Math.max(0, ...offers.map((offer) => offer.offer.max_output_tokens ?? 0));
   return {
     id: row.model.id,
     name: row.model.name,
@@ -387,13 +424,13 @@ function summarizeModel(row: IndexedModel): ModelSummary {
     ...(row.model.release_date ? { release_date: row.model.release_date } : {}),
     open_weights: row.model.open_weights,
     modalities: row.model.modalities,
-    ...(row.maxContext > 0 ? { context_tokens: row.maxContext } : {}),
-    ...(row.model.max_output_tokens !== undefined ? { max_output_tokens: row.model.max_output_tokens } : {}),
-    capabilities: [...row.capabilities].sort(),
+    ...(context > 0 ? { context_tokens: context } : {}),
+    ...(maxOutput > 0 ? { max_output_tokens: maxOutput } : {}),
+    capabilities: [...new Set(offers.flatMap((offer) => [...offer.capabilities]))].sort(),
     providers: [...providers].sort(),
-    offer_count: row.model.offers.length,
-    reasoning_efforts: [...row.efforts].sort(),
-    quantizations: [...row.quantizations].sort(),
+    offer_count: offers.length,
+    reasoning_efforts: [...new Set(offers.flatMap((offer) => [...offer.efforts]))].sort(),
+    quantizations: [...new Set(offers.flatMap((offer) => offer.quantization ? [offer.quantization] : []))].sort(),
     benchmark_ids: [...row.benchmarks].sort(),
     source_ids: [...row.sources].sort(),
   };

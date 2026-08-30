@@ -22,6 +22,7 @@ export async function collectArtificialAnalysis(options: { fetchImpl?: typeof fe
     retries: 0,
   });
   const rows = asArray(payload?.data);
+  if (payload?.has_more === true) throw new Error("Artificial Analysis collection is incomplete: undocumented additional pages are available");
   if (rows.length === 0) throw new Error("Artificial Analysis free endpoint returned no models");
   const records = rows.map((row) => normalize(row, fetchedAt));
   return {

@@ -1,17 +1,16 @@
 #!/usr/bin/env node
 
-import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { DEFAULT_BASE, download } from "./download-snapshot.mjs";
 import { qualityCostPareto } from "./quality-cost-pareto.mjs";
 import { parsePositiveNumber, parseScoreDimension, scoreCandidates } from "./task-fit-score.mjs";
+import { comparisonLane } from "./benchmark-semantics.mjs";
+import { EVIDENCE_STALE_MS, offerInAvailableScope as isAvailableOffer } from "./catalog-scope.mjs";
 
 export { scoreCandidates } from "./task-fit-score.mjs";
-
-const EVIDENCE_MAX_AGE_MS = 36 * 60 * 60 * 1000;
+export { comparisonLane } from "./benchmark-semantics.mjs";
 
 export function parseSelectionArgs(argv) {
   const options = {
@@ -95,43 +94,19 @@ export function parseSelectionArgs(argv) {
   return options;
 }
 
-export function comparisonLane(observation) {
-  const conditions = {
-    benchmark_id: observation.benchmark_id,
-    metric: observation.metric ?? null,
-    unit: observation.unit ?? null,
-    variant: observation.variant ?? null,
-    effort: observation.effort ?? null,
-    evaluator: observation.evaluator ?? null,
-    dataset_version: observation.dataset_version ?? null,
-    configuration: stableValue(observation.configuration ?? {}),
-  };
-  const parts = [
-    observation.benchmark_id,
-    observation.metric ?? "",
-    observation.unit ?? "",
-    observation.variant ?? "",
-    observation.effort ?? "",
-    observation.evaluator ?? "",
-    observation.dataset_version ?? "",
-    JSON.stringify(stableValue(observation.configuration ?? {})),
-  ].join("\u001f");
-  const laneId = createHash("sha256").update(parts).digest("hex").slice(0, 32);
-  return { lane_id: laneId, conditions };
-}
-
 export function selectCandidates(snapshot, options) {
   const components = modelComponents(snapshot.models);
+  const exactRequestedIds = new Set(snapshot.models.map((model) => model.id.toLowerCase()).filter((id) => options.models.includes(id)));
   const generatedAt = Date.parse(snapshot.generated_at);
   const candidates = [];
   for (const records of components) {
     const canonical = chooseCanonical(records);
-    const offers = records.flatMap((model) => model.offers ?? []);
+    const offers = records.filter((model) => sameRelease(model, canonical)).flatMap((model) => model.offers ?? []);
     const matchingOffers = offers.filter((offer) => offerMatches(offer, options, generatedAt));
     const availableOffers = offers.filter((offer) => isAvailableOffer(offer, generatedAt));
     if (options.scope === "available" && !isAvailable(records, availableOffers)) continue;
     if (hasOfferFilters(options) && matchingOffers.length === 0) continue;
-    if (options.models.length > 0 && !matchesModel(records, options.models)) continue;
+    if (options.models.length > 0 && !matchesModel(records, options.models, exactRequestedIds)) continue;
 
     const observations = [];
     let incompatibleObservationCount = 0;
@@ -182,7 +157,7 @@ export function selectCandidates(snapshot, options) {
       total: candidates.length,
       limit: options.limit,
       scope: options.scope,
-      evidence_max_age_hours: EVIDENCE_MAX_AGE_MS / 3_600_000,
+      evidence_max_age_hours: EVIDENCE_STALE_MS / 3_600_000,
       generated_at: snapshot.generated_at,
       content_hash: snapshot.content_hash,
       scoring,
@@ -203,7 +178,8 @@ function modelComponents(models) {
   models.forEach((model, index) => {
     for (const alias of model.aliases ?? []) {
       const target = byId.get(String(alias.id).toLowerCase());
-      if (target !== undefined) join(index, target);
+      // Unknown release dates cannot bridge otherwise distinct releases.
+      if (target !== undefined && sameRelease(model, models[target])) join(index, target);
     }
   });
   const groups = new Map();
@@ -233,15 +209,6 @@ function isAvailable(records, availableOffers) {
   return true;
 }
 
-function isAvailableOffer(offer, generatedAt) {
-  if (offer.status !== "active") return false;
-  if (offer.expires_at && Date.parse(offer.expires_at) <= generatedAt) return false;
-  return (offer.evidence ?? []).some((item) => {
-    const fetchedAt = Date.parse(item.fetched_at);
-    return Number.isFinite(fetchedAt) && fetchedAt <= generatedAt && generatedAt - fetchedAt <= EVIDENCE_MAX_AGE_MS;
-  });
-}
-
 function hasOfferFilters(options) {
   return options.providers.length > 0 || options.efforts.length > 0 || options.quantizations.length > 0
     || (options.variants ?? []).length > 0 || options.capabilities.length > 0 || options.minContext > 0;
@@ -260,9 +227,10 @@ function offerMatches(offer, options, generatedAt) {
       || offer.supported_parameters?.some((parameter) => parameter.toLowerCase() === capability));
 }
 
-function matchesModel(records, requested) {
+function matchesModel(records, requested, exactRequestedIds) {
+  const ids = new Set(records.map((model) => model.id.toLowerCase()));
   const names = new Set(records.flatMap((model) => [model.id, ...(model.aliases ?? []).map((alias) => alias.id)]).map((id) => id.toLowerCase()));
-  return requested.some((id) => names.has(id));
+  return requested.some((id) => exactRequestedIds.has(id) ? ids.has(id) : names.has(id));
 }
 
 function sameRelease(record, canonical) {
@@ -291,23 +259,15 @@ function compactOffer(offer) {
   };
 }
 
-function stableValue(value) {
-  if (Array.isArray(value)) return value.map(stableValue);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, nested]) => [key, stableValue(nested)]));
-  }
-  return value;
-}
-
 function parseInteger(value, name, minimum) {
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < minimum) throw new Error(`${name} must be an integer >= ${minimum}`);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(parsed) || parsed < minimum) throw new Error(`${name} must be a safe decimal integer >= ${minimum}`);
   return parsed;
 }
 
 function parseRange(value, name, minimum, maximum) {
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < minimum || parsed > maximum) {
+  if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(value) || !Number.isFinite(parsed) || parsed < minimum || parsed > maximum) {
     throw new Error(`${name} must be a finite number between ${minimum} and ${maximum}`);
   }
   return parsed;
@@ -323,7 +283,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (options.help) console.log(usage());
     else {
       const bundle = await download({ base: options.base, out: options.cache });
-      const snapshot = JSON.parse(await readFile(resolve(options.cache, "snapshot.json"), "utf8"));
+      const snapshot = JSON.parse(await readFile(bundle.snapshot_path, "utf8"));
       const result = selectCandidates(snapshot, options);
       result.meta.bundle_reused = bundle.reused;
       console.log(JSON.stringify(result, null, 2));

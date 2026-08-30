@@ -1,9 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "npm run build:static",
+  "buildCommand": "npm run build:publish",
   "functions": {
     "api/**/*.ts": {
-      "includeFiles": "runtime-query.json"
+      "includeFiles": "{runtime-query.json,.agents/skills/model-that-fits-my-task/scripts/*.mjs}"
     }
   }
 }

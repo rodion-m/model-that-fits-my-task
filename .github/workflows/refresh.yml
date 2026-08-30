@@ -17,6 +17,7 @@ concurrency:
 jobs:
   refresh-and-publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -33,6 +34,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Check types before collecting data
+        run: npm run typecheck
+
       - name: Refresh and validate snapshot
         run: npm run update:db
         env:
@@ -41,11 +45,13 @@ jobs:
           OPENROUTER_ENDPOINTS: "1"
           OPENROUTER_ENDPOINT_CAP: "120"
 
-      - name: Run deterministic tests
+      - name: Build current artifacts and run deterministic tests
         run: npm test
 
-      - name: Build static API projection
-        run: npm run build:static
+      - name: Verify redistribution rights before any public write
+        run: npm run check:publication
+        env:
+          AA_REDISTRIBUTION_LICENSE_CONFIRMED: ${{ vars.AA_REDISTRIBUTION_LICENSE_CONFIRMED }}
 
       - name: Commit changed snapshot
         run: |

@@ -1,0 +1,217 @@
+{
+  "measured_at": "2026-08-30T23:09:38.127Z",
+  "node": "v24.18.0",
+  "tsx": "4.23.12",
+  "system": {
+    "platform": "darwin",
+    "architecture": "arm64",
+    "os_release": "25.6.0",
+    "cpu": "Apple M3 Pro"
+  },
+  "methodology": {
+    "isolated_process_per_artifact": true,
+    "os_page_cache": "not controlled; these are process-cold, not disk-cold measurements",
+    "percentile": "nearest rank",
+    "iterations": 100,
+    "warmup_iterations": 5,
+    "network_requests": 0,
+    "scope": "local catalog query implementation; not a model-quality benchmark or a serverless/CDN latency measurement"
+  },
+  "archive_minified_bytes": 52224495,
+  "results": [
+    {
+      "artifact": "archive",
+      "artifact_bytes": 90412506,
+      "artifact_mtime_ms": 1788131062933.179,
+      "content_hash": "54d482eaa0b34212a295e361be324c003cd5b5705505de0c3cd0d67add436acd",
+      "generated_at": "2026-08-30T23:01:16.536Z",
+      "model_count": 12378,
+      "observation_count": 32565,
+      "offer_count": 10204,
+      "load_and_validate_ms": 1116.380209,
+      "build_index_ms": 191.48325,
+      "rss_before_bytes": 75923456,
+      "rss_after_bytes": 1042890752,
+      "peak_rss_bytes": 1222197248,
+      "measurements": [
+        {
+          "name": "available_model_summaries",
+          "parameters": "view=summary&sort=context&limit=25",
+          "first_query_ms": 26.02175000000011,
+          "query": {
+            "samples": 100,
+            "min_ms": 19.139541999999892,
+            "p50_ms": 20.04054099999985,
+            "p95_ms": 21.858375000000024,
+            "max_ms": 22.785750000000007
+          },
+          "serialization": {
+            "samples": 100,
+            "min_ms": 0.031165999999757332,
+            "p50_ms": 0.03820799999994051,
+            "p95_ms": 0.051375000000007276,
+            "max_ms": 0.06424999999990177
+          },
+          "response_bytes": 10904
+        },
+        {
+          "name": "available_offer_costs",
+          "parameters": "profile=chat-short&sort=cost&limit=25",
+          "first_query_ms": 51.9777909999998,
+          "query": {
+            "samples": 100,
+            "min_ms": 41.37420800000018,
+            "p50_ms": 45.45245799999975,
+            "p95_ms": 56.42866700000013,
+            "max_ms": 69.57150000000001
+          },
+          "serialization": {
+            "samples": 100,
+            "min_ms": 0.06762499999967986,
+            "p50_ms": 0.07687500000065484,
+            "p95_ms": 0.10691700000097626,
+            "max_ms": 0.1680419999993319
+          },
+          "response_bytes": 36070
+        },
+        {
+          "name": "available_facets",
+          "parameters": "scope=available",
+          "first_query_ms": 0.3141250000007858,
+          "query": {
+            "samples": 100,
+            "min_ms": 0.0810830000009446,
+            "p50_ms": 0.0900419999998121,
+            "p95_ms": 0.10354200000074343,
+            "max_ms": 0.2029999999995198
+          },
+          "serialization": {
+            "samples": 100,
+            "min_ms": 0.004249999999956344,
+            "p50_ms": 0.004542000000583357,
+            "p95_ms": 0.006084000000555534,
+            "max_ms": 0.03204199999890989
+          },
+          "response_bytes": 2969
+        },
+        {
+          "name": "one_lane_score_order",
+          "parameters": "scope=all&lane_id=e9514862887f3a91325ee0be4ade7ddd&sort=score&limit=25",
+          "first_query_ms": 2.8516249999993306,
+          "query": {
+            "samples": 100,
+            "min_ms": 1.2321670000001177,
+            "p50_ms": 1.3834160000005795,
+            "p95_ms": 1.6629590000011376,
+            "max_ms": 2.644916999999623
+          },
+          "serialization": {
+            "samples": 100,
+            "min_ms": 0.028291999999055406,
+            "p50_ms": 0.033083000000260654,
+            "p95_ms": 0.048333000000639004,
+            "max_ms": 0.10912500000085856
+          },
+          "response_bytes": 22647
+        }
+      ]
+    },
+    {
+      "artifact": "runtime",
+      "artifact_bytes": 54819527,
+      "artifact_mtime_ms": 1788131178134.242,
+      "content_hash": "54d482eaa0b34212a295e361be324c003cd5b5705505de0c3cd0d67add436acd",
+      "generated_at": "2026-08-30T23:01:16.536Z",
+      "model_count": 12378,
+      "observation_count": 32565,
+      "offer_count": 10204,
+      "load_and_validate_ms": 977.5124170000001,
+      "build_index_ms": 181.20012500000007,
+      "rss_before_bytes": 65011712,
+      "rss_after_bytes": 825688064,
+      "peak_rss_bytes": 1021427712,
+      "measurements": [
+        {
+          "name": "available_model_summaries",
+          "parameters": "view=summary&sort=context&limit=25",
+          "first_query_ms": 26.14237500000013,
+          "query": {
+            "samples": 100,
+            "min_ms": 19.421666000000187,
+            "p50_ms": 20.106583,
+            "p95_ms": 21.2662499999999,
+            "max_ms": 31.75887499999999
+          },
+          "serialization": {
+            "samples": 100,
+            "min_ms": 0.03208300000005693,
+            "p50_ms": 0.037250000000312866,
+            "p95_ms": 0.046709000000191736,
+            "max_ms": 0.05854100000010476
+          },
+          "response_bytes": 10904
+        },
+        {
+          "name": "available_offer_costs",
+          "parameters": "profile=chat-short&sort=cost&limit=25",
+          "first_query_ms": 50.82179200000019,
+          "query": {
+            "samples": 100,
+            "min_ms": 40.827416999999514,
+            "p50_ms": 43.81129199999941,
+            "p95_ms": 50.63537499999984,
+            "max_ms": 56.21491700000024
+          },
+          "serialization": {
+            "samples": 100,
+            "min_ms": 0.06079200000021956,
+            "p50_ms": 0.07237499999973807,
+            "p95_ms": 0.088249999999789,
+            "max_ms": 0.21112499999981083
+          },
+          "response_bytes": 36070
+        },
+        {
+          "name": "available_facets",
+          "parameters": "scope=available",
+          "first_query_ms": 0.2872079999997368,
+          "query": {
+            "samples": 100,
+            "min_ms": 0.08191600000100152,
+            "p50_ms": 0.08583400000134134,
+            "p95_ms": 0.10124999999970896,
+            "max_ms": 0.1773750000011205
+          },
+          "serialization": {
+            "samples": 100,
+            "min_ms": 0.004416999998284155,
+            "p50_ms": 0.004667000000154076,
+            "p95_ms": 0.0055840000004536705,
+            "max_ms": 0.016125000000101863
+          },
+          "response_bytes": 2969
+        },
+        {
+          "name": "one_lane_score_order",
+          "parameters": "scope=all&lane_id=e9514862887f3a91325ee0be4ade7ddd&sort=score&limit=25",
+          "first_query_ms": 2.515124999999898,
+          "query": {
+            "samples": 100,
+            "min_ms": 1.1404170000005251,
+            "p50_ms": 1.5678340000013122,
+            "p95_ms": 5.158957999999984,
+            "max_ms": 29.363666999999623
+          },
+          "serialization": {
+            "samples": 100,
+            "min_ms": 0.030709000000570086,
+            "p50_ms": 0.04137500000069849,
+            "p95_ms": 0.16645799999969313,
+            "max_ms": 0.3382920000003651
+          },
+          "response_bytes": 22647
+        }
+      ]
+    }
+  ]
+}

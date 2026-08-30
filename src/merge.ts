@@ -3,8 +3,9 @@ import { SCHEMA_VERSION, WORKLOAD_PROFILES } from "./constants.js";
 import type { BenchmarkDefinition, Evidence, Model, Offer, Snapshot, SourceRecord, SourceResult } from "./types.js";
 import { asModelRecord } from "./sources/common.js";
 import { canonicalizeBenchmarkDefinition, canonicalizeBenchmarkObservation } from "./benchmark-registry.js";
-
-const CONFIDENCE_RANK = { unresolved: 0, alias: 1, exact: 2 } as const;
+import { applyMetadata, mergeMetadata, metadataOf, metadataProjections } from "./provenance.js";
+import { assertSnapshotShape } from "./schema.js";
+import { isAvailabilityEvidence } from "../.agents/skills/model-that-fits-my-task/scripts/catalog-scope.mjs";
 
 export function emptySnapshot(now = new Date().toISOString()): Snapshot {
   const snapshot: Snapshot = {
@@ -37,8 +38,7 @@ export function mergeSnapshots(previous: Snapshot | undefined, results: SourceRe
       else modelMap.delete(id);
     }
     for (const [id, benchmark] of benchmarkMap) {
-      if (benchmark.evidence.source_id === result.source_id
-        || benchmark.aliases?.some((alias) => alias.toLowerCase().startsWith(`${result.source_id.toLowerCase()}.`))) {
+      if (benchmark.evidence.source_id === result.source_id) {
         benchmarkMap.delete(id);
       }
     }
@@ -48,7 +48,8 @@ export function mergeSnapshots(previous: Snapshot | undefined, results: SourceRe
     if (result.status !== "ok") continue;
     for (const record of result.records) {
       const current = modelMap.get(record.id);
-      modelMap.set(record.id, current ? mergeModel(current, record) : normalizeModel(asModelRecord(record)));
+      modelMap.set(record.id, current ? mergeModel(current, record, result.source_id)
+        : normalizeModel(applyMetadata(asModelRecord(record), { [result.source_id]: metadataOf(record) })));
     }
     for (const rawBenchmark of result.benchmark_definitions ?? []) {
       const benchmark = canonicalizeBenchmarkDefinition(rawBenchmark);
@@ -76,20 +77,7 @@ export function mergeSnapshots(previous: Snapshot | undefined, results: SourceRe
 }
 
 export function validateSnapshot(snapshot: Snapshot): void {
-  if (snapshot.schema_version !== SCHEMA_VERSION) throw new Error(`unsupported schema version: ${snapshot.schema_version}`);
-  if (!Array.isArray(snapshot.models) || !Array.isArray(snapshot.sources)) throw new Error("snapshot models/sources must be arrays");
-  const modelIds = new Set<string>();
-  for (const model of snapshot.models) {
-    if (!model.id || modelIds.has(model.id)) throw new Error(`duplicate/empty model id: ${model.id}`);
-    modelIds.add(model.id);
-    const offerIds = new Set<string>();
-    for (const currentOffer of model.offers) {
-      if (!currentOffer.id || offerIds.has(currentOffer.id)) throw new Error(`duplicate/empty offer id on ${model.id}`);
-      offerIds.add(currentOffer.id);
-    }
-  }
-  const expectedHash = contentHash(hashableSnapshot(snapshot));
-  if (snapshot.content_hash && snapshot.content_hash !== expectedHash) throw new Error("snapshot content_hash mismatch");
+  assertSnapshotShape(snapshot);
 }
 
 export function hashableSnapshot(snapshot: Snapshot): unknown {
@@ -112,7 +100,7 @@ function normalizeModel(model: Model): Model {
     },
     capabilities: sortObject(model.capabilities),
     reasoning: dedupBy(model.reasoning, (value) => `${value.source_id}:${value.evidence.url}`).sort((a, b) => a.source_id.localeCompare(b.source_id)),
-    offers: dedupBy(model.offers.map(normalizeOffer), (value) => value.id).sort(compareById),
+    offers: dedupBy(mergeOffers([], model.offers), (value) => value.id).sort(compareById),
     benchmarks: mergeBenchmarkObservations(model.benchmarks).sort((a, b) => benchmarkKey(a).localeCompare(benchmarkKey(b))),
     pricing_observations: dedupBy(model.pricing_observations, observationKey).sort((a, b) => observationKey(a).localeCompare(observationKey(b))),
     runtime_observations: dedupBy(model.runtime_observations, runtimeKey).sort((a, b) => runtimeKey(a).localeCompare(runtimeKey(b))),
@@ -121,22 +109,13 @@ function normalizeModel(model: Model): Model {
   };
 }
 
-function mergeModel(current: Model, record: SourceRecord): Model {
+function mergeModel(current: Model, record: SourceRecord, sourceId: string): Model {
   const incoming = asModelRecord(record);
-  return normalizeModel({
+  const projections = metadataProjections(current);
+  projections[sourceId] = mergeMetadata(projections[sourceId] ?? {}, metadataOf(record));
+  return normalizeModel(applyMetadata({
     ...current,
-    ...pickDefined(record),
-    id: current.id,
-    identity_confidence: CONFIDENCE_RANK[incoming.identity_confidence] > CONFIDENCE_RANK[current.identity_confidence]
-      ? incoming.identity_confidence
-      : current.identity_confidence,
-    creators: [...current.creators, ...incoming.creators],
     aliases: [...current.aliases, ...incoming.aliases],
-    modalities: {
-      input: [...current.modalities.input, ...incoming.modalities.input],
-      output: [...current.modalities.output, ...incoming.modalities.output],
-    },
-    capabilities: mergeCapabilities(current.capabilities, incoming.capabilities),
     reasoning: [...current.reasoning, ...incoming.reasoning],
     offers: mergeOffers(current.offers, incoming.offers),
     benchmarks: mergeBenchmarkSets(current.benchmarks, incoming.benchmarks),
@@ -144,7 +123,7 @@ function mergeModel(current: Model, record: SourceRecord): Model {
     runtime_observations: mergeByKey(current.runtime_observations, incoming.runtime_observations, runtimeKey),
     measurements: mergeByKey(current.measurements, incoming.measurements, measurementKey),
     evidence: mergeEvidence(current.evidence, incoming.evidence),
-  });
+  }, projections));
 }
 
 function normalizeOffer(currentOffer: Offer): Offer {
@@ -164,19 +143,37 @@ function mergeOffers(current: Offer[], incoming: Offer[]): Offer[] {
   for (const item of [...current, ...incoming]) {
     const key = offerKey(item);
     const existing = map.get(key);
-    map.set(key, existing ? normalizeOffer({
-      ...existing,
-      ...pickDefined(item),
-      pricing: [...existing.pricing, ...item.pricing],
-      runtime: [...existing.runtime, ...item.runtime],
-      measurements: [...existing.measurements, ...item.measurements],
-      supported_parameters: [...existing.supported_parameters, ...item.supported_parameters],
-      reasoning_efforts: [...existing.reasoning_efforts, ...item.reasoning_efforts],
-      capabilities: mergeCapabilities(existing.capabilities, item.capabilities),
-      evidence: mergeEvidence(existing.evidence, item.evidence),
-    }) : normalizeOffer(item));
+    map.set(key, existing ? combineOfferProjections({ ...offerProjections(existing), ...offerProjections(item) })
+      : item.source_projections ? combineOfferProjections(item.source_projections) : normalizeOffer(item));
   }
   return [...map.values()];
+}
+
+function offerProjections(value: Offer): Record<string, Omit<Offer, "source_projections">> {
+  if (value.source_projections) return { ...value.source_projections };
+  const sources = [...new Set(value.evidence.map((item) => item.source_id))];
+  return sources.length === 1 ? { [sources[0]]: value } : {};
+}
+
+function combineOfferProjections(projections: NonNullable<Offer["source_projections"]>): Offer {
+  const values = Object.entries(projections).sort(([a], [b]) => a.localeCompare(b)).map(([, value]) => value);
+  if (values.length === 0) throw new Error("offer has no attributable source projection");
+  let combined = values[0];
+  for (const value of values.slice(1)) combined = {
+    ...combined,
+    ...pickDefined(value),
+    pricing: [...combined.pricing, ...value.pricing],
+    runtime: [...combined.runtime, ...value.runtime],
+    measurements: [...combined.measurements, ...value.measurements],
+    supported_parameters: [...combined.supported_parameters, ...value.supported_parameters],
+    reasoning_efforts: [...combined.reasoning_efforts, ...value.reasoning_efforts],
+    capabilities: mergeCapabilities(combined.capabilities, value.capabilities),
+    evidence: mergeEvidence(combined.evidence, value.evidence),
+  };
+  const operational = values.filter((value) => value.evidence.some(isAvailabilityEvidence));
+  const status = operational.some((value) => value.status === "absent") ? "absent"
+    : operational.some((value) => value.status === "active") ? "active" : "unknown";
+  return normalizeOffer({ ...combined, status, ...(values.length > 1 ? { source_projections: projections } : {}) });
 }
 
 function mergeStatuses(previous: Snapshot["sources"], results: SourceResult[]): Snapshot["sources"] {
@@ -232,7 +229,9 @@ function mergeBenchmarkSets(current: Model["benchmarks"], incoming: Model["bench
 
 function rawBenchmarkKeys(value: Model["benchmarks"][number]): string[] {
   return (value.source_benchmark_ids ?? [value.benchmark_id]).map((rawId) =>
-    `${value.evidence.source_id}:${rawId}:${value.variant ?? ""}:${value.effort ?? ""}:${value.metric ?? ""}`
+    JSON.stringify([value.evidence.source_id, rawId, value.variant ?? null, value.effort ?? null,
+      value.metric ?? null, value.unit ?? null, value.evaluator ?? null, value.dataset_version ?? null,
+      stableValue(value.configuration ?? {})])
   );
 }
 
@@ -264,20 +263,26 @@ function mergeByKey<T>(current: T[], incoming: T[], key: (value: T) => string): 
 }
 
 function withoutSource(model: Model, sourceId: string): Model {
-  return normalizeModel({
+  const projections = metadataProjections(model);
+  const hasMetadata = Boolean(projections[sourceId]) || model.evidence.some((value) => value.source_id === sourceId);
+  delete projections[sourceId];
+  const stripped = {
     ...model,
     aliases: model.aliases.filter((value) => value.source_id !== sourceId),
     reasoning: model.reasoning.filter((value) => value.source_id !== sourceId),
     offers: model.offers.flatMap((value) => {
-      const remainingEvidence = value.evidence.filter((item) => item.source_id !== sourceId);
-      return remainingEvidence.length > 0 ? [{ ...value, evidence: remainingEvidence }] : [];
+      if (!value.evidence.some((item) => item.source_id === sourceId)) return [value];
+      const contributions = offerProjections(value);
+      delete contributions[sourceId];
+      return Object.keys(contributions).length > 0 ? [combineOfferProjections(contributions)] : [];
     }),
     benchmarks: model.benchmarks.filter((value) => value.evidence.source_id !== sourceId),
     pricing_observations: model.pricing_observations.filter((value) => value.evidence.source_id !== sourceId),
     runtime_observations: model.runtime_observations.filter((value) => value.evidence.source_id !== sourceId),
     measurements: model.measurements.filter((value) => value.evidence.source_id !== sourceId),
     evidence: model.evidence.filter((value) => value.source_id !== sourceId),
-  });
+  };
+  return normalizeModel(hasMetadata ? applyMetadata(stripped, projections) : stripped);
 }
 
 function hasModelData(model: Model): boolean {

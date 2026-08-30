@@ -260,8 +260,12 @@ function compactArenaMetrics(row: ArenaRow): Record<string, Scalar> {
 function parseModelVariant(value: string): ModelVariant {
   let baseName = value.replace(/[†*]/g, "").replace(/\s+/g, " ").trim();
   let effort: string | undefined;
+  // Max is a product tier for Qwen, Flux and other families. Bare effort
+  // suffixes are recognized only for families that publish that convention.
+  const hasBareEffortConvention = /^(?:openai\/|anthropic\/|x-ai\/|google\/|z-ai\/|moonshotai\/)?(?:gpt-|o[134](?:-|$)|claude-|grok-|gemini-|glm-|kimi-)/i.test(baseName)
+    && !/-codex-max$/i.test(baseName);
   const effortMatch = baseName.match(/\s*\((low|medium|high|xhigh|max)\)\s*$/i)
-    ?? baseName.match(/[-_](low|medium|high|xhigh|max)$/i);
+    ?? (hasBareEffortConvention ? baseName.match(/[-_](low|medium|high|xhigh|max)$/i) : null);
   if (effortMatch) {
     effort = effortMatch[1].toLowerCase();
     baseName = baseName.slice(0, effortMatch.index ?? baseName.length).trim();

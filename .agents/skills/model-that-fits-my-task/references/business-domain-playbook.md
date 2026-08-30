@@ -23,7 +23,7 @@ Before using a named benchmark, resolve its canonical entry and count exact comp
 
 | Workload | Primary evidence | Supporting evidence | What the evidence does not establish |
 | --- | --- | --- | --- |
-| Broad professional deliverables | [GDPval-AA](https://openai.com/index/gdpval/) for economically valuable artifacts across many occupations; [APEX-Agents](https://www.mercor.com/blog/introducing-apex-agents/) for long-horizon investment-banking, consulting, and legal work; [JobBench](https://job-bench.github.io/) for work experts actually want delegated | AA Briefcase and GDPval rubrics as labeled broad professional-work signals | An aggregate score does not identify the best model for one occupation, company process, or application stack |
+| Broad professional deliverables | [GDPval-AA](https://artificialanalysis.ai/evaluations/gdpval-aa/) for economically valuable artifacts across many occupations; [APEX-Agents](https://www.mercor.com/blog/introducing-apex-agents/) for long-horizon investment-banking, consulting, and legal work; [JobBench](https://job-bench.github.io/) for work experts actually want delegated | AA Briefcase and [original GDPval](https://openai.com/index/gdpval/) rubrics as separately labeled broad professional-work signals | An aggregate score does not identify the best model for one occupation, company process, or application stack; preserve the evaluated system and exact score scale |
 | Cross-application business automation | [AutomationBench-AA](https://artificialanalysis.ai/evaluations/automationbench-aa/) for Finance, HR, Marketing, Operations, Sales, and Support workflows across simulated SaaS APIs | [EnterpriseOps-Gym](https://github.com/ServiceNow/EnterpriseOps-Gym) for Calendar, CSM, Drive, Email, HR, ITSM, Teams, and hybrid stateful workflows | Automation success does not prove campaign quality, sales judgment, fair hiring, or policy correctness; compare guardrail-safe score as well as objectives completed |
 | Customer service and service operations | [τ³-bench](https://taubench.com/) first, then τ²/τ-bench for the matching retail, airline, telecom, or banking lane; EnterpriseOps-Gym CSM for back-office state changes | AutomationBench Support and generic tool-use evidence | Do not transfer results across domain, release, text/voice/knowledge mode, policy set, user simulator, or tool environment |
 | Finance research and analyst work | [Vals Finance Agent v2](https://www.vals.ai/benchmarks/fabv2) for filing-grounded analyst workflows; [FinanceArena](https://www.afterquery.com/leaderboard/finance-arena) only for its exact published FinanceQA lane | Broad APEX/GDPval finance tasks; archived, saturated [CorpFin v2](https://www.vals.ai/benchmarks/corp_fin_v2) only as a historical credit-agreement anchor | Retrieval scores do not establish modeling accuracy; partial-credit scores do not imply a review-ready analyst deliverable |
@@ -43,6 +43,15 @@ Before using a named benchmark, resolve its canonical entry and count exact comp
 | Research and management consulting | APEX-Agents for professional consulting deliverables; BrowseComp/WideResearch for evidence-gathering when browsing is central | GDPval-AA and document/chart benchmarks | Research accuracy does not establish recommendation quality, organizational fit, forecast accuracy, or successful implementation |
 
 ## Thin or missing direct coverage
+
+GDPval-AA is not the original OpenAI GDPval run. As of this review, the official
+GDPval-AA v2 protocol uses the Stirrup harness and pairwise LLM judging to
+produce Elo. Do not call unversioned catalog rows v2 or convert Elo/normalized
+index values into a percentage of professional reliability. The published
+Fable result includes an Opus 4.8 fallback; without that configuration, a
+republished score cannot establish base-model performance. Source-specific
+lanes prevent cross-source blending but cannot recover omitted harness,
+fallback, judge, or dataset details. See the [current methodology](https://artificialanalysis.ai/evaluations/gdpval-aa/).
 
 The current snapshot has useful operational evidence but no strong dedicated ranking for several decisions. Report these gaps instead of stretching a nearby benchmark:
 

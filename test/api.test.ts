@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import modelsHandler from "../api/v1/models.js";
+import modelHandler from "../api/v1/models/[id].js";
 import offersHandler from "../api/v1/offers.js";
 import facetsHandler from "../api/v1/facets.js";
 import benchmarksHandler from "../api/v1/benchmarks.js";
@@ -70,7 +71,7 @@ test("benchmark observations reject mixed-lane score sorts", () => {
   assert.equal((mixed.body as any).error.parameter, "sort");
 
   const listed = fakeResponse();
-  observationsHandler({ url: "/api/v1/benchmark-observations?limit=1" }, listed);
+  observationsHandler({ url: "/api/v1/benchmark-observations?metric=wer&limit=1" }, listed);
   assert.equal(listed.statusCode, 200);
   assert.ok((listed.body as any).data[0].lane_id);
   const laneId = (listed.body as any).data[0].lane_id;
@@ -78,6 +79,15 @@ test("benchmark observations reject mixed-lane score sorts", () => {
   observationsHandler({ url: `/api/v1/benchmark-observations?lane_id=${laneId}&sort=score&limit=1` }, sorted);
   assert.equal(sorted.statusCode, 200);
   assert.equal((sorted.body as any).data[0].lane_id, laneId);
+  assert.equal((sorted.body as any).meta.score_direction, "lower");
+});
+
+test("malformed model identifiers return an uncached client error", () => {
+  const response = fakeResponse();
+  modelHandler({ query: { id: "%" } }, response);
+  assert.equal(response.statusCode, 400);
+  assert.equal((response.body as any).error.parameter, "id");
+  assert.equal(response.headers["cache-control"], "no-store");
 });
 
 test("models and facets default to available scope metadata", () => {

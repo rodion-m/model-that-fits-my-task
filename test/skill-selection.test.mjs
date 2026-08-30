@@ -3,6 +3,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { mergeSnapshots } from "../src/merge.ts";
+import { health as describeHealth } from "../src/query.ts";
 
 import { download } from "../.agents/skills/model-that-fits-my-task/scripts/download-snapshot.mjs";
 import { validateDecision } from "../.agents/skills/model-that-fits-my-task/scripts/validate-decision.mjs";
@@ -185,7 +187,7 @@ test("quality-cost-speed Pareto mode treats TTFT and TPS as separate objectives"
   const evidence = { source_id: "fixture", url: "https://example.test", fetched_at: "2026-08-27T00:00:00.000Z", status: "observed" };
   const benchmark = (value) => ({ benchmark_id: "coding.current", value, metric: "pass_rate", evidence });
   const pricedRuntimeOffer = (provider, inputPrice, ttft, tps) => ({
-    ...offer(provider, { tools: true }, 100_000, evidence),
+    ...offer(provider, { tools: true }, 2_000_000, evidence),
     id: `${provider}:offer`,
     pricing: [
       { dimension: "input", unit: "million_tokens", amount_usd_per_unit: inputPrice, kind: "fixed" },
@@ -321,9 +323,11 @@ test("offline available scope admits unknown release dates with fresh offers", (
 
 test("bundle downloader reuses a matching content-hash cache without downloading the snapshot again", async () => {
   const directory = await mkdtemp(join(tmpdir(), "models-labyrinth-bundle-"));
-  const health = { status: "ok", schema_version: "1.0", content_hash: "same", model_count: 1, source_count: 1 };
   const schema = { $defs: {}, properties: { schema_version: { const: "1.0" } } };
-  const snapshot = { schema_version: "1.0", generated_at: "2026-08-27T00:00:00.000Z", content_hash: "same", models: [{ id: "model" }], sources: [{ source_id: "source" }], benchmarks: [] };
+  const timestamp = "2026-08-27T00:00:00.000Z";
+  const snapshot = mergeSnapshots(undefined, [{ source_id: "fixture", url: "https://fixture.example", fetched_at: timestamp,
+    status: "ok", records: [{ id: "vendor/model" }] }], timestamp);
+  const health = describeHealth(snapshot);
   const calls = [];
   const fetchImpl = async (url) => {
     calls.push(String(url));
@@ -443,6 +447,7 @@ function offer(provider, capabilities, context, evidence) {
     provider_model_id: "vendor/model",
     status: "active",
     context_tokens: context,
+    max_output_tokens: context,
     capabilities,
     reasoning_efforts: [],
     supported_parameters: [],
@@ -479,7 +484,7 @@ function completeRecommendation() {
     privacy: { status: "unknown", evidence: "ZDR field is null." },
     runtime: { status: "unknown", evidence: "No route-level samples." },
     quality_transfer: { status: "partial", lane_id: "lane-1", evidence: "Benchmark quantization is unspecified." },
-    cost: { status: "estimated", assumptions: "10k input and 1k output tokens; no cache hit assumed." },
+    cost: { status: "estimated", estimated_cost_usd: 0.012, assumptions: "10k input and 1k output tokens; no cache hit assumed." },
     operational_validation: {
       status: "proposed",
       sequential_requests: 10,

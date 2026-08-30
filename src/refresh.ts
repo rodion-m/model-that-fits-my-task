@@ -26,6 +26,10 @@ export async function collectSources(
       if (result.status === "ok" && result.replace_previous !== false && result.records.length === 0) {
         return { ...result, status: "error" as const, replace_previous: false, error: "source returned an empty catalog; previous projection was kept" };
       }
+      if (result.source_id !== adapter.source_id) throw new Error("adapter returned a different source identity");
+      // Validate one normalized projection before it can replace retained data.
+      // A malformed source must not abort updates from every healthy source.
+      if (result.status === "ok") mergeSnapshots(undefined, [result], result.fetched_at);
       return result.status === "ok" && result.replace_previous === undefined
         ? { ...result, replace_previous: true }
         : result;

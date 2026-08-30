@@ -6,7 +6,7 @@ export const MAX_LIMIT = 100;
 export const DEFAULT_MAX_BYTES = 12 * 1024 * 1024;
 export const CACHE_TTL_SECONDS = 60 * 60;
 export const SNAPSHOT_CACHE_TTL_MS = Number.POSITIVE_INFINITY;
-export const EVIDENCE_STALE_MS = 36 * 60 * 60 * 1_000;
+export { EVIDENCE_STALE_MS } from "../.agents/skills/model-that-fits-my-task/scripts/catalog-scope.mjs";
 export const RUNTIME_QUERY_FILENAME = "runtime-query.json";
 
 export const WORKLOAD_PROFILES: WorkloadProfile[] = [
@@ -20,19 +20,19 @@ export const WORKLOAD_PROFILES: WorkloadProfile[] = [
   },
   {
     id: "rag-long-prefix",
-    description: "Long retrieval prompt with a mostly reusable prefix and one prefix cache write per request.",
+    description: "Illustrative 25k-token retrieval request: 20k cache-read tokens, 5k new cache-write tokens, and 1k output tokens.",
     input_tokens: 25_000,
     cached_input_ratio: 0.8,
-    cache_write_tokens: 20_000,
+    cache_write_tokens: 5_000,
     output_tokens: 1_000,
     requests_per_task: 1,
   },
   {
     id: "agentic-multistep",
-    description: "Growing context across a multi-step agent workflow with a cache write matching the reusable prefix on each request.",
+    description: "Illustrative seven-step workflow averaging 25k input per request: 17.5k cache-read and 7.5k new cache-write tokens.",
     input_tokens: 25_000,
     cached_input_ratio: 0.7,
-    cache_write_tokens: 17_500,
+    cache_write_tokens: 7_500,
     output_tokens: 1_000,
     requests_per_task: 7,
   },

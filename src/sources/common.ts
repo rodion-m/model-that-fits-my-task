@@ -67,6 +67,7 @@ export function offer(input: {
   providerName?: unknown;
   providerModelId: unknown;
   variant?: unknown;
+  status?: Offer["status"];
   expiresAt?: unknown;
   quantization?: unknown;
   contextTokens?: unknown;
@@ -87,7 +88,7 @@ export function offer(input: {
     ...(stringValue(input.providerName) ? { provider_name: stringValue(input.providerName) } : {}),
     provider_model_id: providerModelId,
     ...(variant ? { variant } : {}),
-    status: "active",
+    status: input.status ?? "active",
     ...(stringValue(input.expiresAt) ? { expires_at: stringValue(input.expiresAt) } : {}),
     ...(stringValue(input.quantization) ? { quantization: stringValue(input.quantization) } : {}),
     ...(numberValue(input.contextTokens) !== undefined ? { context_tokens: numberValue(input.contextTokens) } : {}),

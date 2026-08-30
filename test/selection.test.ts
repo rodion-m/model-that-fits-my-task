@@ -243,16 +243,16 @@ test("benchmark observations expose a stable lane_id and reject mixed-lane score
   assert.equal(listed.data[0].evidence.source_id, "vals");
   assert.equal(listed.meta.excluded_count, 0);
 
-  const isolated = listBenchmarkObservations(snapshot, new URLSearchParams("benchmark=coding.terminalBench21&effort=high&metric=score&unit=percent&evaluator=vals&dataset_version=2.1&sort=score"));
+  const isolated = listBenchmarkObservations(snapshot, new URLSearchParams("benchmark=coding.terminalBench21&effort=high&metric=score&unit=percent&evaluator=vals&dataset_version=2.1&sort=score&direction=higher"));
   assert.equal(isolated.data.length, 2);
   assert.equal(isolated.data[0].value, 70);
 
-  const sorted = listBenchmarkObservations(snapshot, new URLSearchParams(`lane_id=${listed.data[0].lane_id}&sort=score`));
+  const sorted = listBenchmarkObservations(snapshot, new URLSearchParams(`lane_id=${listed.data[0].lane_id}&sort=score&direction=higher`));
   assert.equal(sorted.data.length, 2);
   assert.equal(sorted.data[0].lane_id, listed.data[0].lane_id);
   assert.equal(sorted.data[0].evidence.source_id, "vals");
 
-  const all = listBenchmarkObservations(snapshot, new URLSearchParams("scope=all&benchmark=coding.terminalBench21&effort=high&sort=score"));
+  const all = listBenchmarkObservations(snapshot, new URLSearchParams("scope=all&benchmark=coding.terminalBench21&effort=high&sort=score&direction=higher"));
   assert.equal(all.meta.scope, "all");
   assert.equal(all.meta.excluded_count, 0);
   assert.deepEqual(all.data.map((row) => row.value), [70, 10]);
@@ -264,6 +264,7 @@ test("benchmark observations expose a stable lane_id and reject mixed-lane score
 
 test("workload cost is complete for cache write, tiers, and reasoning or reports missing dimensions", () => {
   const complete = offerWithPricing(normalizeMillionPricing({ input: 1, output: 2, cache_read: 0.2, cache_write: 1.25, reasoning: 3, request: 0.001 }));
+  complete.pricing.find((price) => price.dimension === "cache_write")!.cache_write_billing = "full_rate";
   const completeCost = estimateWorkloadCost(complete, {
     id: "custom",
     description: "test",
@@ -295,6 +296,7 @@ test("workload cost is complete for cache write, tiers, and reasoning or reports
 
   const snapshot = mergeSnapshots(undefined, [result("models_dev", [sourceRecord("models_dev", "openai/gpt-4o", "GPT-4o", "offer")])], "2026-08-26T00:00:00.000Z");
   snapshot.models[0].offers[0].pricing = normalizeMillionPricing({ input: 1, output: 2, cache_read: 0.2, cache_write: 1.25 });
+  snapshot.models[0].offers[0].pricing.find((price) => price.dimension === "cache_write")!.cache_write_billing = "full_rate";
   const listed = listOffers(snapshot, new URLSearchParams("profile=custom&input_tokens=10000&output_tokens=300&cached_input_ratio=0.5&cache_write_tokens=4000"));
   assert.equal(listed.data[0].missing_dimensions?.length, 0);
   assert.ok((listed.data[0].estimated_cost_usd ?? 0) > 0);
@@ -328,7 +330,7 @@ test("workload cost is complete for cache write, tiers, and reasoning or reports
   assert.ok(unresolved.missing_dimensions.includes("request"));
 });
 
-test("runtime query artifact is compact and the API cache lasts for the instance lifetime", async () => {
+test("runtime query artifact retains observations and the API cache lasts for the instance lifetime", async () => {
   const snapshot = fixtureSnapshot();
   const artifact = buildRuntimeQueryArtifact(snapshot);
   assert.equal(artifact.content_hash, snapshot.content_hash);

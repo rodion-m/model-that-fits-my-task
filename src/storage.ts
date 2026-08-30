@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import { dirname } from "node:path";
+import { randomUUID } from "node:crypto";
 import type { Snapshot } from "./types.js";
 import { assertSnapshotShape } from "./schema.js";
 import { stableValue } from "./hash.js";
@@ -17,15 +18,20 @@ export async function readSnapshot(path: string): Promise<Snapshot | undefined> 
 }
 
 export async function writeSnapshotAtomic(path: string, snapshot: Snapshot): Promise<void> {
-  const temporary = `${path}.tmp`;
+  assertSnapshotShape(snapshot);
+  const temporary = `${path}.${randomUUID()}.tmp`;
   await fs.mkdir(dirname(path), { recursive: true });
   const text = `${JSON.stringify(stableValue(snapshot), null, 2)}\n`;
-  const handle = await fs.open(temporary, "w");
   try {
-    await handle.writeFile(text, "utf8");
-    await handle.sync();
+    const handle = await fs.open(temporary, "wx");
+    try {
+      await handle.writeFile(text, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await fs.rename(temporary, path);
   } finally {
-    await handle.close();
+    await fs.rm(temporary, { force: true });
   }
-  await fs.rename(temporary, path);
 }
