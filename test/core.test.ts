@@ -594,7 +594,7 @@ test("complete source collections replace by default while suspicious drops pres
   const collected = await collectSources(undefined, [{
     source_id: "fixture",
     url: "https://fixture.example",
-    collect: async () => result("fixture", []),
+    collect: async () => result("fixture", [sourceRecord("fixture", "vendor/a", "A", "https://fixture.example", "a")]),
   }]);
   assert.equal(collected[0].replace_previous, true);
 

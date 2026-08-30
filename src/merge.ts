@@ -181,19 +181,22 @@ function mergeOffers(current: Offer[], incoming: Offer[]): Offer[] {
 
 function mergeStatuses(previous: Snapshot["sources"], results: SourceResult[]): Snapshot["sources"] {
   const previousById = new Map(previous.map((source) => [source.source_id, source]));
-  return results.map((result) => {
+  for (const result of results) {
     const old = previousById.get(result.source_id);
-    return {
+    previousById.set(result.source_id, {
       source_id: result.source_id,
       url: result.url,
       status: result.status,
       attempted_at: result.fetched_at,
       ...(result.status === "ok" ? { last_success_at: result.fetched_at } : old?.last_success_at ? { last_success_at: old.last_success_at } : {}),
-      record_count: result.records.length,
+      // This is the retained projection's source-record count, not the failed
+      // attempt's empty result. The next refresh uses it as its drop baseline.
+      record_count: result.status === "ok" ? result.records.length : old?.record_count ?? 0,
       warning_count: result.warnings?.length ?? 0,
       ...(result.error ? { error: result.error.slice(0, 300) } : {}),
-    };
-  }).sort((a, b) => a.source_id.localeCompare(b.source_id));
+    });
+  }
+  return [...previousById.values()].sort((a, b) => a.source_id.localeCompare(b.source_id));
 }
 
 function offerKey(value: Offer): string {

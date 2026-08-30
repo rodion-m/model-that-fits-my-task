@@ -13,7 +13,8 @@ export async function collectSources(
     try {
       const result = await adapter.collect({ previous, fetchImpl });
       const previousCount = previous?.sources.find((source) => source.source_id === adapter.source_id)?.record_count ?? 0;
-      if (result.status === "ok" && previousCount > 0 && result.records.length < previousCount * 0.5) {
+      if (result.status === "ok" && result.replace_previous !== false
+        && previousCount > 0 && result.records.length < previousCount * 0.5) {
         return {
           ...result,
           status: "error" as const,
@@ -21,6 +22,9 @@ export async function collectSources(
           replace_previous: false,
           error: `source record count dropped from ${previousCount} to ${result.records.length}; previous projection was kept`,
         };
+      }
+      if (result.status === "ok" && result.replace_previous !== false && result.records.length === 0) {
+        return { ...result, status: "error" as const, replace_previous: false, error: "source returned an empty catalog; previous projection was kept" };
       }
       return result.status === "ok" && result.replace_previous === undefined
         ? { ...result, replace_previous: true }
@@ -54,7 +58,8 @@ export async function refreshDatabase(options: {
   if (snapshot.models.length === 0) throw new Error("refresh produced an empty model snapshot");
   if (previous && snapshot.models.length < previous.models.length * ratio) throw new Error("refresh produced an unexpectedly small snapshot");
   validateSnapshot(snapshot);
-  const changed = !previous || contentHash(previous.models) !== contentHash(snapshot.models) || previous.content_hash !== snapshot.content_hash;
+  const changed = !previous || previous.content_hash !== snapshot.content_hash
+    || previous.generated_at !== snapshot.generated_at || contentHash(previous.sources) !== contentHash(snapshot.sources);
   if (changed) await writeSnapshotAtomic(options.path, snapshot);
   return { snapshot, results, changed };
 }
