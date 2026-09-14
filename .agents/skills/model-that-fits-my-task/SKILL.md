@@ -31,7 +31,7 @@ Use Vercel for filters and GitHub Pages for full downloads. Start with `/health`
 
 For filters, pagination, and offline snapshot work, read [data-guide.md](references/data-guide.md). Use the filtered API first.
 
-After choosing an OpenRouter model slug, read [openrouter-provider-ranking.md](references/openrouter-provider-ranking.md) and use the dedicated skill when several routes are viable. Integrate its exact provider and effort choice; route economics cannot retroactively change the model-quality claim.
+After choosing an OpenRouter model slug, read the handoff contract in [openrouter-provider-ranking.md](references/openrouter-provider-ranking.md) and use the sibling [`openrouter-provider-ranking`](../openrouter-provider-ranking/SKILL.md) skill when several routes are viable. That skill owns endpoint compatibility, `endpoint × reasoning effort` ranking, routing mode, and fallback order. Integrate its exact route into this skill's model recommendation; route economics cannot retroactively change the model-quality claim.
 
 ## Comparison rules
 

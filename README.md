@@ -11,9 +11,13 @@ the licensing review below. API reads make no network requests.
 
 ## Model-selection skill
 
-The repository includes [`model-that-fits-my-task`](.agents/skills/model-that-fits-my-task/SKILL.md),
-an agent skill that turns a workload description into an evidence-backed model
-and provider-route recommendation. It uses the filtered API for ordinary
+The repository includes two cooperating agent skills:
+[`model-that-fits-my-task`](.agents/skills/model-that-fits-my-task/SKILL.md)
+turns a workload description into an evidence-backed model recommendation, and
+[`openrouter-provider-ranking`](.agents/skills/openrouter-provider-ranking/SKILL.md)
+turns a chosen OpenRouter model slug into an exact provider route, reasoning
+configuration, routing mode, fallback order, and verification plan. The model
+skill uses the filtered API for ordinary
 decisions and downloads the full snapshot together with its JSON Schema only
 when the comparison cannot be expressed efficiently through API filters.
 
@@ -51,10 +55,10 @@ Its business-domain playbook routes finance, legal, healthcare, education,
 public-service, office, SaaS automation, customer-service, HR, IT operations,
 cybersecurity, and modernization workloads to the closest available evidence,
 while naming domains where the current snapshot has only weak proxy coverage.
-For endpoint-level routing after an OpenRouter model slug is chosen, it links
-to the maintained
-[`openrouter-provider-ranking`](https://github.com/CodeAlive-AI/ai-driven-development/tree/main/skills/openrouter-provider-ranking)
-skill instead of duplicating that specialized workflow.
+For endpoint-level routing after an OpenRouter model slug is chosen, it hands
+off to the repository's sibling
+[`openrouter-provider-ranking`](.agents/skills/openrouter-provider-ranking/SKILL.md)
+skill and incorporates the selected route back into the final recommendation.
 
 ## Architecture
 

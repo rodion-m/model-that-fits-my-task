@@ -1,11 +1,11 @@
 # OpenRouter provider-ranking handoff
 
-Use the dedicated [`openrouter-provider-ranking`](https://github.com/CodeAlive-AI/ai-driven-development/tree/main/skills/openrouter-provider-ranking) skill after Models Labyrinth has selected one or a small number of exact OpenRouter model slugs and the remaining question is which OpenRouter endpoint provider or routing mode should serve the workload.
+Use the repository's sibling [`openrouter-provider-ranking`](../../openrouter-provider-ranking/SKILL.md) skill after Models Labyrinth has selected one or a small number of exact OpenRouter model slugs and the remaining question is which OpenRouter endpoint provider or routing mode should serve the workload.
 
-This is a reference to the maintained upstream skill, not a vendored copy. Follow the upstream instructions when it is installed; do not recreate its scoring formula from memory. Install it when permitted with:
+Both skills are maintained in this repository. Follow the provider-ranking skill directly; do not recreate its scoring formula from memory. To install that skill independently when permitted, use:
 
 ```bash
-npx skills add CodeAlive-AI/ai-driven-development@openrouter-provider-ranking -g -y
+npx skills add rodion-m/model-that-fits-my-task@openrouter-provider-ranking -g -y
 ```
 
 ## Handoff trigger
