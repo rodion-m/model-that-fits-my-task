@@ -72,7 +72,7 @@ test("live Vals static benchmark snapshot contract", { skip: !live }, async () =
   assert.ok(result.records.length > 0);
   assert.ok((result.benchmark_definitions?.length ?? 0) > 0);
   const observations = result.records.flatMap((record) => record.benchmarks ?? []);
-  assert.ok(observations.some((row) => row.benchmark_id === "vals.rsi_index" && row.evidence.status === "derived"));
+  assert.ok(observations.some((row) => row.benchmark_id === "vals.rsi_index" && row.variant === undefined && typeof row.value === "number"));
   assert.ok(observations.some((row) => row.benchmark_id === "vals.poker_agent" && row.metric === "trueskill_rating" && row.unit === "rating"));
 });
 

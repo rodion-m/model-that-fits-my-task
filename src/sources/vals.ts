@@ -38,13 +38,32 @@ export async function collectVals(options: {
       try {
         return { slug, url, view: parseValsBenchmarkPage(html) };
       } catch (error) {
+        const externalView = valsExternalViewUrl(html);
+        if (externalView) {
+          const payload = await fetchText(new URL(externalView, url).toString(), {
+            fetchImpl: options.fetchImpl,
+            timeoutMs: 30_000,
+            maxBytes: 2 * 1024 * 1024,
+          });
+          return { slug, url, view: valsBenchmarkView(JSON.parse(payload)) };
+        }
         const componentPath = rsiComponentPath(html);
         if (!componentPath) throw error;
-        const bundle = await fetchText(new URL(componentPath, url).toString(), {
+        const componentUrl = new URL(componentPath, url).toString();
+        const bundle = await fetchText(componentUrl, {
           fetchImpl: options.fetchImpl,
           timeoutMs: 30_000,
           maxBytes: 2 * 1024 * 1024,
         });
+        const imported = bundle.match(/from["'](\.\/benchmark_view_[^"']+\.js)["']/);
+        if (imported) {
+          const moduleText = await fetchText(new URL(imported[1], componentUrl).toString(), {
+            fetchImpl: options.fetchImpl,
+            timeoutMs: 30_000,
+            maxBytes: 2 * 1024 * 1024,
+          });
+          return { slug, url, view: parseValsViewModule(moduleText) };
+        }
         return { slug, url, view: parseValsRsiBundle(bundle, html) };
       }
     } catch (error) {
@@ -158,6 +177,32 @@ export function parseValsBenchmarkPage(html: string): ValsBenchmarkView {
   const detailed = candidates.sort((a, b) => Object.keys(b.tasks).length - Object.keys(a.tasks).length)[0];
   if (!detailed) throw new Error("Vals page contained no structured benchmark view");
   return detailed;
+}
+
+export function parseValsViewModule(source: string): ValsBenchmarkView {
+  const bindings = [...source.matchAll(/\{metadata:([A-Za-z_$][\w$]*),tasks:([A-Za-z_$][\w$]*)\}/g)];
+  if (bindings.length === 0) throw new Error("Vals benchmark module did not export metadata and tasks");
+  let lastError: unknown;
+  for (const binding of bindings.reverse()) {
+    try {
+      return valsBenchmarkView({ metadata: assignmentObject(source, binding[1]), tasks: assignmentObject(source, binding[2]) });
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Vals benchmark module omitted a benchmark view");
+}
+
+function valsBenchmarkView(value: unknown): ValsBenchmarkView {
+  const candidate = asRecord(value);
+  const metadata = asRecord(candidate.metadata);
+  const tasks = asRecord(candidate.tasks);
+  if (!stringValue(metadata.slug) || Object.keys(tasks).length === 0) throw new Error("Vals page contained no structured benchmark view");
+  return { metadata, tasks: tasks as ValsBenchmarkView["tasks"] };
+}
+
+function valsExternalViewUrl(html: string): string | undefined {
+  return html.match(/benchmarkViewUrl(?:&quot;|")\s*:\s*\[0,\s*(?:&quot;|")(\/[^"&]+\.json)(?:&quot;|")/)?.[1];
 }
 
 export function parseValsRsiBundle(bundle: string, html = ""): ValsBenchmarkView {
@@ -318,9 +363,11 @@ function rsiComponentPath(html: string): string | undefined {
 }
 
 function variableForProperty(bundle: string, property: string): string {
-  const match = bundle.match(new RegExp(`\\b${property}:([A-Za-z_$][\\w$]*)`));
-  if (!match) throw new Error(`Vals RSI bundle omitted ${property}`);
-  return match[1];
+  for (const match of bundle.matchAll(new RegExp(`\\b${property}:([A-Za-z_$][\\w$]*)`, "g"))) {
+    const variable = match[1];
+    if (new RegExp(`(?:const|,)\\s*${variable.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}=`).test(bundle)) return variable;
+  }
+  throw new Error(`Vals RSI bundle omitted ${property}`);
 }
 
 function assignmentObject(bundle: string, variable: string): Record<string, unknown> {
@@ -356,7 +403,9 @@ function assignmentLiteral(bundle: string, variable: string): unknown {
   const json = literal
     .replace(/([,{])([A-Za-z_$][\w$]*):/g, '$1"$2":')
     .replace(/(^|[:,\[])\.(\d+)/g, (_match, prefix: string, digits: string) => `${prefix}0.${digits}`)
-    .replace(/(^|[:,\[])-\.(\d+)/g, (_match, prefix: string, digits: string) => `${prefix}-0.${digits}`);
+    .replace(/(^|[:,\[])-\.(\d+)/g, (_match, prefix: string, digits: string) => `${prefix}-0.${digits}`)
+    .replace(/(^|[:,\[])!0(?=\s*[,}\]])/g, "$1true")
+    .replace(/(^|[:,\[])!1(?=\s*[,}\]])/g, "$1false");
   try {
     return JSON.parse(json);
   } catch {

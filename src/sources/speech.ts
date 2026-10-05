@@ -18,6 +18,8 @@ interface PipecatSttRow {
   perfect: number;
   werMean: number;
   pooledWer: number;
+  werMeanJudge?: string;
+  pooledWerJudge?: string;
   ttfsMedian: number;
   ttfsP95: number;
   ttfsP99: number;
@@ -74,6 +76,7 @@ export function parsePipecatResults(text: string): ParsedPipecatStt {
   if (requiredHeaders.some((header) => !headers.includes(header))) throw new Error("Pipecat STT README result table changed its required columns");
 
   const index = new Map(headers.map((header, position) => [header, position]));
+  const previousJudge = text.match(/†\s+Scored by the previous judge \(([^)]+)\)/i)?.[1]?.trim();
   const rows: PipecatSttRow[] = [];
   let skippedRows = 0;
   for (const line of lines.slice(headerIndex + 1)) {
@@ -83,18 +86,22 @@ export function parsePipecatResults(text: string): ParsedPipecatStt {
       skippedRows += 1;
       continue;
     }
+    const werMean = measuredCell(cells[index.get("wer mean")!], previousJudge);
+    const pooledWer = measuredCell(cells[index.get("pooled wer")!], previousJudge);
     const row = {
       vendor: cells[index.get("vendor")!],
       model: cells[index.get("model")!],
       transcripts: tableNumber(cells[index.get("transcripts")!]),
       perfect: tableNumber(cells[index.get("perfect")!]),
-      werMean: tableNumber(cells[index.get("wer mean")!]),
-      pooledWer: tableNumber(cells[index.get("pooled wer")!]),
+      werMean: werMean?.value,
+      pooledWer: pooledWer?.value,
+      ...(werMean?.judge ? { werMeanJudge: werMean.judge } : {}),
+      ...(pooledWer?.judge ? { pooledWerJudge: pooledWer.judge } : {}),
       ttfsMedian: tableNumber(cells[index.get("ttfs median")!]),
       ttfsP95: tableNumber(cells[index.get("ttfs p95")!]),
       ttfsP99: tableNumber(cells[index.get("ttfs p99")!]),
     };
-    if (!row.vendor || !row.model || Object.values(row).some((value) => value === undefined)) {
+    if (!row.vendor || !row.model || row.transcripts === undefined || row.perfect === undefined || row.werMean === undefined || row.pooledWer === undefined || row.ttfsMedian === undefined || row.ttfsP95 === undefined || row.ttfsP99 === undefined) {
       skippedRows += 1;
       continue;
     }
@@ -230,11 +237,24 @@ function pipecatBenchmarks(row: PipecatSttRow, parsed: ParsedPipecatStt, sourceE
     evidence: sourceEvidence,
   } as const;
   return [
-    { benchmark_id: "pipecat_stt.semantic_wer_mean", value: row.werMean, metric: "semantic_wer_mean", unit: "percent", ...common },
-    { benchmark_id: "pipecat_stt.semantic_wer_pooled", value: row.pooledWer, metric: "semantic_wer_pooled", unit: "percent", ...common },
+    judgedWer({ benchmark_id: "pipecat_stt.semantic_wer_mean", value: row.werMean, metric: "semantic_wer_mean", unit: "percent", ...common }, row.werMeanJudge),
+    judgedWer({ benchmark_id: "pipecat_stt.semantic_wer_pooled", value: row.pooledWer, metric: "semantic_wer_pooled", unit: "percent", ...common }, row.pooledWerJudge),
     { benchmark_id: "pipecat_stt.perfect_transcript_rate", value: row.perfect, metric: "perfect_transcript_rate", unit: "percent", ...common },
     { benchmark_id: "pipecat_stt.transcript_success_rate", value: row.transcripts, metric: "transcript_success_rate", unit: "percent", ...common },
   ];
+}
+
+function judgedWer(observation: BenchmarkObservation, judge?: string): BenchmarkObservation {
+  // The dagger marks WER from the previous judge. Those scores are not comparable with the current judge.
+  if (!judge) return observation;
+  return {
+    ...observation,
+    configuration: { ...observation.configuration, wer_judge: judge },
+    evidence: {
+      ...observation.evidence,
+      note: `Semantic WER was scored by the previous judge (${judge}) and is not comparable with the current Pipecat judge.`.slice(0, 300),
+    },
+  };
 }
 
 function pipecatDefinitions(fetchedAt: string): BenchmarkDefinition[] {
@@ -314,9 +334,18 @@ function pipeCells(line: string): string[] {
 }
 
 function tableNumber(value: string | undefined): number | undefined {
+  const measured = measuredCell(value);
+  return measured && !measured.judge ? measured.value : undefined;
+}
+
+function measuredCell(value: string | undefined, previousJudge?: string): { value: number; judge?: string } | undefined {
   if (value === undefined) return undefined;
-  const parsed = Number(value.replaceAll("ms", "").replaceAll("%", "").trim());
-  return Number.isFinite(parsed) ? parsed : undefined;
+  const match = value.trim().match(/^(-?(?:\d+(?:\.\d+)?|\.\d+))(%|ms)?(†)?$/);
+  if (!match) return undefined;
+  const parsed = Number(match[1]);
+  if (!Number.isFinite(parsed)) return undefined;
+  if (!match[3]) return { value: parsed };
+  return previousJudge ? { value: parsed, judge: previousJudge } : undefined;
 }
 
 function speechProviderSlug(value: string): string {

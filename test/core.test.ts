@@ -16,6 +16,7 @@ import { collectBenchGecko, collectCloudPrice } from "../src/sources/enrichment.
 import { collectVals, parseValsBenchmarkPage, parseValsCatalog, parseValsRsiBundle } from "../src/sources/vals.js";
 import { collectLiveBench, parseCategories, parseCsv, parseModelLinks } from "../src/sources/livebench.js";
 import { collectOpenAsrMultilingual, collectOpenAsrEnglishShortform } from "../src/sources/open-asr.js";
+import { comparisonLaneId } from "../src/lane.js";
 import { collectArtificialAnalysisSpeechToText, collectPipecatStt, parsePipecatResults, parsePipecatServiceRegistry } from "../src/sources/speech.js";
 import type { BenchmarkDefinition, Snapshot, SourceRecord, SourceResult } from "../src/types.js";
 
@@ -314,6 +315,32 @@ test("Pipecat STT parser keeps provider/model slugs and streaming metrics", asyn
   assert.equal(collected.benchmark_definitions?.length, 4);
 });
 
+test("Pipecat keeps previous-judge WER out of the current comparison lane", async () => {
+  const readme = [
+    "Benchmark results on 2 samples from the `smart-turn-data-v3.1-train` dataset.",
+    "<!-- RESULTS_TABLE:START -->",
+    "| Vendor | Model | Transcripts | Perfect | WER Mean | Pooled WER | TTFS Median | TTFS P95 | TTFS P99 |",
+    "|---|---|---|---|---|---|---|---|---|",
+    "| Current | model-a | 99% | 80% | 2% | 2% | 100ms | 200ms | 300ms |",
+    "| NVIDIA | nemotron | 100% | 76% | 1.90%† | 1.95%† | 221ms | 238ms | 252ms |",
+    "<!-- RESULTS_TABLE:END -->",
+    "† Scored by the previous judge (Claude Sonnet 4.5), which reports WER about 15% higher on average than the current judge.",
+  ].join("\n");
+  const services = '"nvidia_nemotron": ServiceDefinition(vendor="NVIDIA",model_label="nemotron")\n"current_model_a": ServiceDefinition(vendor="Current",model_label="model-a")';
+  const parsed = parsePipecatResults(readme);
+  assert.equal(parsed.skippedRows, 0);
+  assert.equal(parsed.rows.find((row) => row.model === "nemotron")?.werMean, 1.9);
+  const collected = await collectPipecatStt({ fetchImpl: async (input) => new Response(String(input).endsWith("services.py") ? services : readme) });
+  const rows = collected.records.flatMap((record) => record.benchmarks ?? []);
+  const current = rows.find((row) => row.metric === "semantic_wer_mean" && row.value === 2);
+  const previous = rows.find((row) => row.metric === "semantic_wer_mean" && row.value === 1.9);
+  assert.equal(previous?.configuration?.wer_judge, "Claude Sonnet 4.5");
+  assert.notEqual(comparisonLaneId(current!), comparisonLaneId(previous!));
+  assert.equal(comparisonLaneId(rows.find((row) => row.metric === "transcript_success_rate" && row.value === 100)!), comparisonLaneId(rows.find((row) => row.metric === "transcript_success_rate" && row.value === 99)!));
+  const unexplained = readme.replace("† Scored by the previous judge (Claude Sonnet 4.5), which reports WER about 15% higher on average than the current judge.", "");
+  assert.equal(parsePipecatResults(unexplained).skippedRows, 1);
+});
+
 test("Pipecat registry preserves upstream service keys as aliases", () => {
   const registry = parsePipecatServiceRegistry([
     '"assemblyai_universal_3_5_pro": ServiceDefinition(',
@@ -463,6 +490,31 @@ test("Vals RSI custom bundle is parsed as an explicit normalized index", async (
   assert.equal(collected.records[0].benchmarks?.[0].unit, "fraction");
   assert.equal(collected.records[0].benchmarks?.[0].evidence.status, "derived");
   assert.equal(collected.records[0].benchmarks?.find((row) => row.variant === "compression")?.metrics?.api_cost_usd, 3.5);
+});
+
+test("Vals reads a benchmark view published beside the page", async () => {
+  const view = { metadata: { slug: "voice-code-bench", accuracy_label: "TSR (%)" }, tasks: {
+    overall: { "vendor/model": { accuracy: 30 } }, ctem: { "vendor/model": { accuracy: 77 } }, wer: { "vendor/model": { accuracy: 5 } },
+  } };
+  const html = '<astro-island component-url="/_astro/BenchmarkViewLoader.fixture.js" props="{&quot;benchmarkViewUrl&quot;:[0,&quot;/_astro/benchmark_view_voice_code_bench.json&quot;]}"></astro-island>';
+  const moduleSource = 'const e={benchmark:"Vals RSI Index",slug:"rsi_index",updated:"2026-10-01",industry:"index",visible:!0,archived:!1};const t={overall:{"openai/gpt-test":{accuracy:37.31,latency:324e3,reasoning_effort:"max"}}};const r={metadata:e,tasks:t};export{r as b};';
+  const rsiHtml = '<astro-island component-url="/_astro/RsiBenchmarkView.fixture.js" props="{&quot;section&quot;:[0,&quot;details&quot;]}"></astro-island>';
+  const collected = await collectVals({ fetchImpl: async (input) => {
+    const url = String(input);
+    if (url.endsWith("/benchmarks")) return new Response('<a href="/benchmarks/voice-code-bench">Voice</a><a href="/benchmarks/rsi_index">RSI</a>');
+    if (url.endsWith("/voice-code-bench")) return new Response(html);
+    if (url.endsWith("/rsi_index")) return new Response(rsiHtml);
+    if (url.endsWith(".json")) return new Response(JSON.stringify(view));
+    if (url.endsWith("/RsiBenchmarkView.fixture.js")) return new Response('import{b as View}from"./benchmark_view_rsi_index.fixture.js";');
+    if (url.endsWith("/benchmark_view_rsi_index.fixture.js")) return new Response(moduleSource);
+    return new Response("missing", { status: 404 });
+  } });
+  const voice = collected.records.find((record) => record.benchmarks?.some((row) => row.benchmark_id === "vals.voice-code-bench"));
+  assert.deepEqual(voice?.benchmarks?.map((row) => [row.metric, row.unit]), [["task_success_rate", "percent"], ["canonical_token_entity_match", "percent"], ["wer", "percent"]]);
+  const rsi = collected.records.find((record) => record.benchmarks?.some((row) => row.benchmark_id === "vals.rsi_index"));
+  assert.equal(rsi?.benchmarks?.[0].value, 37.31);
+  assert.equal(rsi?.benchmarks?.[0].evidence.status, "observed");
+  assert.equal(rsi?.benchmarks?.[0].effort, "max");
 });
 
 test("Vals keeps non-percent metrics explicit and does not promote unmatched systems to exact models", async () => {
