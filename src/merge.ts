@@ -155,7 +155,7 @@ function offerProjections(value: Offer): Record<string, Omit<Offer, "source_proj
   return sources.length === 1 ? { [sources[0]]: value } : {};
 }
 
-function combineOfferProjections(projections: NonNullable<Offer["source_projections"]>): Offer {
+export function combineOfferProjections(projections: NonNullable<Offer["source_projections"]>): Offer {
   const values = Object.entries(projections).sort(([a], [b]) => a.localeCompare(b)).map(([, value]) => value);
   if (values.length === 0) throw new Error("offer has no attributable source projection");
   let combined = values[0];

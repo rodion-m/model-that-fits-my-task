@@ -374,19 +374,28 @@ push and pull request with read-only repository permissions.
 
 This repository and its static endpoints can be public. Artificial Analysis
 distinguishes internal API access from redistribution rights in its
-[Data API terms](https://artificialanalysis.ai/data-api). The repository does
-not establish which license its operator holds. `check:publication` examines
-retained evidence, derived-source markers, and evaluator provenance, including
-AA STT and data retained after a skipped refresh. Removing the API key does not
-remove those data.
+[Data API terms](https://artificialanalysis.ai/data-api). A working `AA_API_KEY`
+only authorizes collection. On that page the Free API is internal use only,
+Pro is restricted external use, and commercial redistribution is a separate
+package. The repository does not establish which license its operator holds.
+
+`check:publication` examines retained evidence, derived-source markers, and
+evaluator provenance, including AA STT and data retained after a skipped
+refresh. Removing the API key does not remove those rows. An unstripped
+snapshot still fails this check unless `AA_REDISTRIBUTION_LICENSE_CONFIRMED`
+is exactly `1`.
 
 Only after an applicable redistribution license is confirmed should an operator
 set `AA_REDISTRIBUTION_LICENSE_CONFIRMED=1` in the deployment environment and
-the matching GitHub Actions repository variable. Without confirmation, the
-automated workflow stops before push/Pages and Vercel stops before publishing;
-local checks and `build:static` remain available. This gate is not access
-control: it does not protect existing Git history, already-public artifacts,
-manual pushes, or prebuilt deployments. Do not bypass it merely to make CI green.
+the matching GitHub Actions repository variable. The refresh step reads that
+same variable. Without confirmation, refresh removes Artificial Analysis
+evidence, observations derived from it, and rows it evaluated, then publishes
+every other source. AA health rows stay, including the last record count, so
+the next refresh can still detect a truncated fetch. Local checks and
+`build:static` remain available. This gate is not access control: it does not
+protect existing Git history, already-public artifacts, manual pushes, or
+prebuilt deployments. Do not set the confirmation variable without a license,
+and do not bypass `check:publication` merely to make CI green.
 
 ParseBench and ExtractBench are ordinary registered adapters, so both CSVs are
 refetched on every scheduled run without any additional secret or workflow

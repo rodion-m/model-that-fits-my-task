@@ -41,6 +41,7 @@ jobs:
         run: npm run update:db
         env:
           AA_API_KEY: ${{ secrets.AA_API_KEY }}
+          AA_REDISTRIBUTION_LICENSE_CONFIRMED: ${{ vars.AA_REDISTRIBUTION_LICENSE_CONFIRMED }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_ENDPOINTS: "1"
           OPENROUTER_ENDPOINT_CAP: "120"

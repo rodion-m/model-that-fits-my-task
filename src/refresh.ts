@@ -1,6 +1,7 @@
 import type { Snapshot, SourceResult } from "./types.js";
 import { SOURCE_ADAPTERS, type SourceAdapter } from "./sources/index.js";
 import { mergeSnapshots, validateSnapshot } from "./merge.js";
+import { redactRestrictedPublication } from "./publication.js";
 import { readSnapshot, writeSnapshotAtomic } from "./storage.js";
 import { contentHash } from "./hash.js";
 
@@ -57,11 +58,17 @@ export async function refreshDatabase(options: {
   const results = await collectSources(previous, options.adapters, options.fetchImpl);
   const successful = results.filter((result) => result.status === "ok" && result.records.length > 0);
   if (successful.length === 0) throw new Error("all configured sources failed or were skipped; previous snapshot was kept");
-  const snapshot = mergeSnapshots(previous, results, options.now ?? new Date().toISOString());
+  // Compare size before redaction: the previous snapshot still contains Artificial Analysis rows.
+  let snapshot = mergeSnapshots(previous, results, options.now ?? new Date().toISOString());
   const ratio = options.minModelRatio ?? 0.5;
   if (snapshot.models.length === 0) throw new Error("refresh produced an empty model snapshot");
   if (previous && snapshot.models.length < previous.models.length * ratio) throw new Error("refresh produced an unexpectedly small snapshot");
   validateSnapshot(snapshot);
+  // A valid API key is not redistribution permission. Keep AA rows only when the license variable is exactly "1".
+  if (process.env.AA_REDISTRIBUTION_LICENSE_CONFIRMED !== "1") {
+    snapshot = redactRestrictedPublication(snapshot);
+    if (snapshot.models.length === 0) throw new Error("refresh produced an empty model snapshot after removing unlicensed Artificial Analysis evidence");
+  }
   const changed = !previous || previous.content_hash !== snapshot.content_hash
     || previous.generated_at !== snapshot.generated_at || contentHash(previous.sources) !== contentHash(snapshot.sources);
   if (changed) await writeSnapshotAtomic(options.path, snapshot);

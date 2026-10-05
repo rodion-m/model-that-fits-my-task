@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { mergeSnapshots } from "../src/merge.js";
+import { assertPublicationAllowed } from "../src/publication.js";
 import { collectSources, refreshDatabase } from "../src/refresh.js";
 import { readSnapshot, writeSnapshotAtomic } from "../src/storage.js";
 import type { SourceAdapter } from "../src/sources/index.js";
@@ -71,6 +72,38 @@ test("a partial refresh retains status for sources that were not attempted", () 
   const previous = mergeSnapshots(undefined, [first, second], initialTime);
   const refreshed = mergeSnapshots(previous, [first], nextTime);
   assert.deepEqual(refreshed.sources, previous.sources);
+});
+
+test("refresh publishes every source except unlicensed Artificial Analysis evidence", async () => {
+  const previousFlag = process.env.AA_REDISTRIBUTION_LICENSE_CONFIRMED;
+  const directory = await mkdtemp(join(tmpdir(), "model-refresh-aa-"));
+  try {
+    delete process.env.AA_REDISTRIBUTION_LICENSE_CONFIRMED;
+    const path = join(directory, "snapshot.json");
+    const catalog = source("catalog", 4);
+    const restricted = source("artificial_analysis", 6);
+    await writeSnapshotAtomic(path, mergeSnapshots(undefined, [catalog, restricted], initialTime));
+    const redacted = await refreshDatabase({ path, adapters: [adapter(catalog), adapter(restricted)], now: nextTime });
+    assert.equal(redacted.snapshot.models.length, 4);
+    assert.equal(redacted.snapshot.models.every((model) => model.id.startsWith("catalog/")), true);
+    assert.equal(redacted.snapshot.sources.some((item) => item.source_id === "artificial_analysis" && item.record_count === 6), true);
+    assert.equal(assertPublicationAllowed(redacted.snapshot).evidence_count, 0);
+
+    await assert.rejects(
+      () => refreshDatabase({ path: join(directory, "aa-only.json"), adapters: [adapter(restricted)], now: nextTime }),
+      /after removing unlicensed Artificial Analysis evidence/,
+    );
+    assert.equal(await readSnapshot(join(directory, "aa-only.json")), undefined);
+
+    process.env.AA_REDISTRIBUTION_LICENSE_CONFIRMED = "1";
+    const retained = await refreshDatabase({ path, adapters: [adapter(catalog), adapter(restricted)], now: nextTime });
+    assert.equal(retained.snapshot.models.length, 10);
+    assert.equal(retained.snapshot.models.some((model) => model.id.startsWith("artificial_analysis/")), true);
+  } finally {
+    if (previousFlag === undefined) delete process.env.AA_REDISTRIBUTION_LICENSE_CONFIRMED;
+    else process.env.AA_REDISTRIBUTION_LICENSE_CONFIRMED = previousFlag;
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("status-only refresh changes are persisted even when model evidence is unchanged", async () => {
